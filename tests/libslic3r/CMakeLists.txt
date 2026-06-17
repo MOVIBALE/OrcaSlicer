@@ -11,6 +11,8 @@ add_executable(${_TEST_NAME}_tests
 	test_elephant_foot_compensation.cpp
 	test_geometry.cpp
 	test_mixed_filament.cpp
+	test_machine_filament_sync.cpp
+	test_mixed_layer_height.cpp
 	test_triangle_selector.cpp
 	test_local_z_order_optimizer.cpp
 	test_placeholder_parser.cpp

@@ -276,6 +276,10 @@ set(lisbslic3r_sources
     Line.hpp
     LocalesUtils.cpp
     LocalesUtils.hpp
+    MachineFilamentSync.cpp
+    MachineFilamentSync.hpp
+    MixedLayerHeight.cpp
+    MixedLayerHeight.hpp
     MarchingSquares.hpp
     Measure.cpp
     Measure.hpp

@@ -1024,6 +1024,8 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionBool, infill_combination))
     // Orca:
     ((ConfigOptionFloatOrPercent,                infill_combination_max_layer_height))
+    ((ConfigOptionBool, inner_wall_combination))
+    ((ConfigOptionFloatOrPercent,                inner_wall_combination_max_layer_height))
     ((ConfigOptionInt,                  fill_multiline))
     // Ironing options
     ((ConfigOptionEnum<IroningType>, ironing_type))
@@ -1037,6 +1039,7 @@ PRINT_CONFIG_CLASS_DEFINE(
     // Detect bridging perimeters
     ((ConfigOptionBool, detect_overhang_wall))
     ((ConfigOptionInt, wall_filament))
+    ((ConfigOptionInt, outer_wall_filament))
     ((ConfigOptionFloatOrPercent, inner_wall_line_width))
     ((ConfigOptionFloat, inner_wall_speed))
     // Total number of perimeters.

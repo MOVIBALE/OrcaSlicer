@@ -106,6 +106,7 @@ public:
     bool has_extruder(unsigned int extruder) const { return std::find(this->extruders.begin(), this->extruders.end(), extruder) != this->extruders.end(); }
 
     // Return a zero based extruder from the region, or extruder_override if overriden.
+    unsigned int outer_wall_filament(const PrintRegion &region) const;
     unsigned int wall_filament(const PrintRegion &region) const;
     unsigned int sparse_infill_filament(const PrintRegion &region) const;
     unsigned int solid_infill_filament(const PrintRegion &region) const;

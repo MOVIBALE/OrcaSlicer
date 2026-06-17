@@ -97,6 +97,19 @@ unsigned int sparse_infill_filament_id_1based(const PrintRegion &region)
     return region.config().sparse_infill_filament.value;
 }
 
+unsigned int outer_wall_filament_id_1based(const PrintRegion &region)
+{
+    const int outer_wall_filament = region.config().outer_wall_filament.value;
+    return unsigned(outer_wall_filament > 0 ? outer_wall_filament : region.config().wall_filament.value);
+}
+
+bool collection_has_external_perimeter(const ExtrusionEntityCollection &extrusions)
+{
+    return std::any_of(extrusions.entities.begin(), extrusions.entities.end(), [](const ExtrusionEntity *entity) {
+        return entity->role() == erExternalPerimeter;
+    });
+}
+
 unsigned int infill_filament_id_1based(const LayerTools &layer_tools, const PrintRegion &region, ExtrusionRole role)
 {
     if (internal_solid_infill_uses_sparse_filament(region, role))
@@ -284,6 +297,13 @@ unsigned int LayerTools::resolve_mixed_1based(unsigned int filament_id) const
 }
 
 // Return a zero based extruder from the region, or extruder_override if overriden.
+unsigned int LayerTools::outer_wall_filament(const PrintRegion &region) const
+{
+    assert(region.config().wall_filament.value > 0);
+    unsigned int id = (this->extruder_override == 0) ? outer_wall_filament_id_1based(region) : this->extruder_override;
+    return resolve_mixed_1based(id) - 1;
+}
+
 unsigned int LayerTools::wall_filament(const PrintRegion &region) const
 {
 	assert(region.config().wall_filament.value > 0);
@@ -319,7 +339,7 @@ unsigned int LayerTools::extruder(const ExtrusionEntityCollection &extrusions, c
             return sparse_infill_filament(region);
         return is_solid_infill(role) ? solid_infill_filament(region) : sparse_infill_filament(region);
     }
-    return wall_filament(region);
+    return extrusions.role() == erExternalPerimeter ? outer_wall_filament(region) : wall_filament(region);
 }
 
 static double calc_max_layer_height(const PrintConfig &config, double max_object_layer_height)
@@ -745,6 +765,17 @@ void ToolOrdering::collect_extruders(const PrintObject &object, const std::vecto
                 if (something_nonoverriddable){
                     const unsigned int configured_wall = (extruder_override == 0) ? region.config().wall_filament.value : extruder_override;
                     unsigned int       wall_ext        = resolve_mixed(configured_wall, layerCount, float(layer->print_z), float(layer->height), &object);
+                    const bool         has_external_perimeter =
+                        extruder_override == 0 &&
+                        outer_wall_filament_id_1based(region) != configured_wall &&
+                        std::any_of(layerm->perimeters.entities.begin(), layerm->perimeters.entities.end(), [](const ExtrusionEntity *entity) {
+                            const auto *collection = dynamic_cast<const ExtrusionEntityCollection*>(entity);
+                            return collection != nullptr && collection_has_external_perimeter(*collection);
+                        });
+                    const unsigned int outer_wall_ext =
+                        has_external_perimeter ?
+                            resolve_mixed(outer_wall_filament_id_1based(region), layerCount, float(layer->print_z), float(layer->height), &object) :
+                            wall_ext;
                     const unsigned int grouped_id =
                         grouped_manual_pattern_mixed_filament_id_for_layer(layer_tools, configured_wall);
                     if (grouped_id != 0) {
@@ -772,6 +803,12 @@ void ToolOrdering::collect_extruders(const PrintObject &object, const std::vecto
                         layer_tools.extruders.emplace_back(wall_ext);
                         if (layerCount == 0)
                             firstLayerExtruders.emplace_back(wall_ext);
+                    }
+                    if (has_external_perimeter) {
+                        append_unique_preserve_order(layer_tools.extruders, outer_wall_ext);
+                        if (layerCount == 0 &&
+                            std::find(firstLayerExtruders.begin(), firstLayerExtruders.end(), int(outer_wall_ext)) == firstLayerExtruders.end())
+                            firstLayerExtruders.emplace_back(int(outer_wall_ext));
                     }
                 }
 

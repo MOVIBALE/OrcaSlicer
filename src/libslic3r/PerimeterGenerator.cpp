@@ -605,7 +605,7 @@ void PerimeterGenerator::split_top_surfaces(const ExPolygons &orig_polygons, ExP
     // get the real top surface
     ExPolygons grown_lower_slices;
     ExPolygons bridge_checker;
-    auto nozzle_diameter = this->print_config->nozzle_diameter.get_at(this->config->wall_filament - 1);
+    auto nozzle_diameter = this->ext_perimeter_flow.nozzle_diameter();
     // Check whether surface be bridge or not
     if (this->lower_slices != NULL) {
         // BBS: get the Polygons below the polygon this layer
@@ -1152,7 +1152,7 @@ void PerimeterGenerator::process_classic()
         // We consider overhang any part where the entire nozzle diameter is not supported by the
         // lower layer, so we take lower slices and offset them by half the nozzle diameter used
         // in the current layer
-        double nozzle_diameter = this->print_config->nozzle_diameter.get_at(this->config->wall_filament - 1);
+        double nozzle_diameter = this->ext_perimeter_flow.nozzle_diameter();
         m_lower_slices_polygons = offset(*this->lower_slices, float(scale_(+nozzle_diameter / 2)));
     }
     
@@ -1179,13 +1179,14 @@ void PerimeterGenerator::process_classic()
     m_ext_mm3_per_mm_smaller_width = this->smaller_ext_perimeter_flow.mm3_per_mm();
 
     // prepare grown lower layer slices for overhang detection
-    m_lower_polygons_series = generate_lower_polygons_series(this->perimeter_flow.width());
+    m_lower_polygons_series = generate_lower_polygons_series(this->perimeter_flow.width(), this->perimeter_flow.nozzle_diameter());
     if (ext_perimeter_width == perimeter_width){
         m_external_lower_polygons_series = m_lower_polygons_series;
     } else {
-        m_external_lower_polygons_series = generate_lower_polygons_series(this->ext_perimeter_flow.width());
+        m_external_lower_polygons_series = generate_lower_polygons_series(this->ext_perimeter_flow.width(), this->ext_perimeter_flow.nozzle_diameter());
     }
-    m_smaller_external_lower_polygons_series = generate_lower_polygons_series(this->smaller_ext_perimeter_flow.width());
+    m_smaller_external_lower_polygons_series =
+        generate_lower_polygons_series(this->smaller_ext_perimeter_flow.width(), this->ext_perimeter_flow.nozzle_diameter());
     // we need to process each island separately because we might have different
     // extra perimeters for each one
     Surfaces all_surfaces = this->slices->surfaces;
@@ -2101,7 +2102,7 @@ void PerimeterGenerator::process_arachne()
         // We consider overhang any part where the entire nozzle diameter is not supported by the
         // lower layer, so we take lower slices and offset them by half the nozzle diameter used
         // in the current layer
-        double nozzle_diameter = this->print_config->nozzle_diameter.get_at(this->config->wall_filament - 1);
+        double nozzle_diameter = this->ext_perimeter_flow.nozzle_diameter();
         m_lower_slices_polygons = offset(*this->lower_slices, float(scale_(+nozzle_diameter / 2)));
     }
 
@@ -2535,9 +2536,8 @@ bool PerimeterGeneratorLoop::is_internal_contour() const
     return true;
 }
 
-std::vector<Polygons> PerimeterGenerator::generate_lower_polygons_series(float width)
+std::vector<Polygons> PerimeterGenerator::generate_lower_polygons_series(float width, float nozzle_diameter)
 {
-    float nozzle_diameter = print_config->nozzle_diameter.get_at(config->wall_filament - 1);
     float start_offset = -0.5 * width;
     float end_offset = 0.5 * nozzle_diameter;
 

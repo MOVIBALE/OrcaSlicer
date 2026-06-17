@@ -151,6 +151,14 @@
       "sub_path": "process/0.12 Fine @Snapmaker U1 (0.4 nozzle).json"
     },
     {
+      "name": "0.12 Mixed Nozzle Outer T0 Inner T1 @Snapmaker U1",
+      "sub_path": "process/0.12 Mixed Nozzle Outer T0 Inner T1 @Snapmaker U1.json"
+    },
+    {
+      "name": "0.10 Mixed Layer Outer Nozzle2 Inner Nozzle1 @Snapmaker U1",
+      "sub_path": "process/0.10 Mixed Layer Outer Nozzle2 Inner Nozzle1 @Snapmaker U1.json"
+    },
+    {
       "name": "0.12 High Quality @Snapmaker U1 (0.4 nozzle)",
       "sub_path": "process/0.12 High Quality @Snapmaker U1 (0.4 nozzle).json"
     },

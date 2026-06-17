@@ -128,8 +128,10 @@ std::string PresetHints::maximum_volumetric_flow_description(const PresetBundle 
     auto feature_extruder_active = [idx_extruder, num_extruders](int i) {
         return i <= 0 || i > num_extruders || idx_extruder == -1 || idx_extruder == i - 1;
     };
+    const int outer_wall_filament                   = print_config.opt_int("outer_wall_filament");
+    bool outer_wall_extruder_active                 = feature_extruder_active(outer_wall_filament > 0 ? outer_wall_filament : print_config.opt_int("wall_filament"));
     bool perimeter_extruder_active                  = feature_extruder_active(print_config.opt_int("wall_filament"));
-    bool infill_extruder_active                     = feature_extruder_active(print_config.opt_int("wall_filament"));
+    bool infill_extruder_active                     = feature_extruder_active(print_config.opt_int("sparse_infill_filament"));
     bool solid_infill_extruder_active               = feature_extruder_active(print_config.opt_int("solid_infill_filament"));
     bool support_material_extruder_active           = feature_extruder_active(print_config.opt_int("support_filament"));
     bool support_material_interface_extruder_active = feature_extruder_active(print_config.opt_int("support_interface_filament"));
@@ -167,8 +169,9 @@ std::string PresetHints::maximum_volumetric_flow_description(const PresetBundle 
                 max_flow_extrusion_type = _utf8(err_msg);
             }
         };
-        if (perimeter_extruder_active) {
+        if (outer_wall_extruder_active)
             test_flow(frExternalPerimeter, outer_wall_line_width, std::max(outer_wall_speed, small_perimeter_speed), L("outer wall"));
+        if (perimeter_extruder_active) {
             test_flow(frPerimeter,         inner_wall_line_width,          std::max(inner_wall_speed,          small_perimeter_speed), L("inner wall"));
         }
         if (! bridging && infill_extruder_active)

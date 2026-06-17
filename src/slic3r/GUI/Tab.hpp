@@ -86,6 +86,7 @@ public:
 	wxBoxSizer*	vsizer() const { return m_vsizer; }
 	wxWindow*	parent() const { return m_parent; }
 	const wxString&	title()	 const { return m_title; }
+	void        set_title(const wxString& title);
 	size_t		iconID() const { return m_iconID; }
 	void		set_config(DynamicPrintConfig* config_in) { m_config = config_in; }
 	void		reload_config();
@@ -584,6 +585,7 @@ class TabPrinter : public Tab
 private:
 	bool		m_use_silent_mode = false;
 	void		append_option_line(ConfigOptionsGroupShp optgroup, const std::string opt_key);
+    void        update_extruder_page_titles();
 	bool		m_rebuild_kinematics_page = false;
 
 	ogStaticText*	m_fff_print_host_upload_description_line {nullptr};

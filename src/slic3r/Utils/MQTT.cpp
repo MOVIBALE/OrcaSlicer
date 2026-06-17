@@ -24,9 +24,10 @@ MqttClient::MqttClient(const std::string& server_address, const std::string& cli
 {
     BOOST_LOG_TRIVIAL(info) << "[MQTT_INFO] 初始化MQTT连接 server_address: " << server_address << ", client_id: " << client_id;
 
-    // Configure connection options
-    // 写死false
-    connOpts_.set_clean_session(false);
+    // Configure connection options. The U1 local broker accepts MQTT 3.1.1;
+    // keep this explicit so Paho does not fall back during LAN authorization.
+    connOpts_.set_mqtt_version(MQTTVERSION_3_1_1);
+    connOpts_.set_clean_session(clean_session);
     connOpts_.set_keep_alive_interval(30);
     connOpts_.set_connect_timeout(10);
     // 初始禁用自动重连，只有首次连接成功后才启用
@@ -526,10 +527,9 @@ void MqttClient::on_failure(const mqtt::token& tok)
         
         connected_.store(false, std::memory_order_release);
         
-        // 调用连接失败回调
-        if (connection_failure_callback_) {
-            connection_failure_callback_();
-        }
+        // Do not disconnect from inside the Paho failure callback. Connect()
+        // is still waiting on the same token, and an immediate disconnect can
+        // mask the broker result as a generic TCP completion failure.
     } else {
         // 其他操作失败的处理
         BOOST_LOG_TRIVIAL(error) << "[MQTT_INFO] Operation failed for token: " << tok.get_message_id();

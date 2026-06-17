@@ -88,6 +88,40 @@ static std::string nozzle_diameter_to_rule_key(double nozzle_diameter)
     return out + "mm";
 }
 
+static wxString extruder_page_title(const DynamicPrintConfig* config, size_t extruder_idx)
+{
+    wxString title = wxString::Format(_L("Extruder %d"), int(extruder_idx + 1));
+    const auto* nozzle_opt = config != nullptr ? config->option<ConfigOptionFloats>("nozzle_diameter") : nullptr;
+    if (nozzle_opt != nullptr && extruder_idx < nozzle_opt->values.size())
+        title += wxString(" (") + wxString::FromUTF8(nozzle_diameter_to_rule_key(nozzle_opt->values[extruder_idx]).c_str()) + ")";
+    return title;
+}
+
+static bool extruder_idx_from_page_title(const wxString& title, size_t extruders_count, size_t& extruder_idx)
+{
+    if (title.IsSameAs(L("Extruder"))) {
+        extruder_idx = 0;
+        return extruders_count > 0;
+    }
+
+    wxString number_text;
+    if (!title.StartsWith("Extruder ", &number_text))
+        return false;
+
+    size_t number_len = 0;
+    while (number_len < number_text.length() && number_text[number_len] >= '0' && number_text[number_len] <= '9')
+        ++number_len;
+    if (number_len == 0)
+        return false;
+
+    long val = 0;
+    if (!number_text.SubString(0, number_len - 1).ToLong(&val) || val <= 0 || size_t(val) > extruders_count)
+        return false;
+
+    extruder_idx = size_t(val - 1);
+    return true;
+}
+
 static void validate_filament_hot_bed_nozzle_relation(wxWindow* parent)
 {
     (void)parent;
@@ -2404,12 +2438,20 @@ void TabPrint::build()
         optgroup->append_single_option_line("filter_out_gap_fill", "strength_settings_infill#filter-out-tiny-gaps");
         optgroup->append_single_option_line("infill_wall_overlap", "strength_settings_infill#infill-wall-overlap");
 
+        optgroup = page->new_optgroup(L("Filament for Features"), L"param_filament_for_features");
+        optgroup->append_single_option_line("outer_wall_filament", "multimaterial_settings_filament_for_features#outer-wall");
+        optgroup->append_single_option_line("wall_filament", "multimaterial_settings_filament_for_features#walls");
+        optgroup->append_single_option_line("sparse_infill_filament", "multimaterial_settings_filament_for_features#infill");
+        optgroup->append_single_option_line("solid_infill_filament", "multimaterial_settings_filament_for_features#solid-infill");
+
         optgroup = page->new_optgroup(L("Advanced"), L"param_advanced");
         optgroup->append_single_option_line("align_infill_direction_to_model", "strength_settings_advanced#align-infill-direction-to-model");
         optgroup->append_single_option_line("extra_solid_infills", "strength_settings_infill#extra-solid-infill");
         optgroup->append_single_option_line("bridge_angle", "strength_settings_advanced#bridge-infill-direction");
         optgroup->append_single_option_line("internal_bridge_angle", "strength_settings_advanced#bridge-infill-direction"); // ORCA: Internal bridge angle override
         optgroup->append_single_option_line("minimum_sparse_infill_area", "strength_settings_advanced#minimum-sparse-infill-threshold");
+        optgroup->append_single_option_line("inner_wall_combination", "strength_settings_advanced#infill-combination");
+        optgroup->append_single_option_line("inner_wall_combination_max_layer_height", "strength_settings_advanced#max-layer-height");
         optgroup->append_single_option_line("infill_combination", "strength_settings_advanced#infill-combination");
         optgroup->append_single_option_line("infill_combination_max_layer_height", "strength_settings_advanced#max-layer-height");
         optgroup->append_single_option_line("detect_narrow_internal_solid_infill", "strength_settings_advanced#detect-narrow-internal-solid-infill");
@@ -2571,6 +2613,7 @@ void TabPrint::build()
         optgroup->append_single_option_line("single_extruder_multi_material_priming", "multimaterial_settings_prime_tower");
 
         optgroup = page->new_optgroup(L("Filament for Features"), L"param_filament_for_features");
+        optgroup->append_single_option_line("outer_wall_filament", "multimaterial_settings_filament_for_features#outer-wall");
         optgroup->append_single_option_line("wall_filament", "multimaterial_settings_filament_for_features#walls");
         optgroup->append_single_option_line("sparse_infill_filament", "multimaterial_settings_filament_for_features#infill");
         optgroup->append_single_option_line("solid_infill_filament", "multimaterial_settings_filament_for_features#solid-infill");
@@ -2881,6 +2924,8 @@ static DynamicPrintConfig resolved_model_config_for_tab(const DynamicPrintConfig
         const int extruder = extruder_opt->value;
         if (!resolved.has("wall_filament"))
             resolved.set_key_value("wall_filament", new ConfigOptionInt(extruder));
+        if (!resolved.has("outer_wall_filament"))
+            resolved.set_key_value("outer_wall_filament", new ConfigOptionInt(extruder));
         if (!resolved.has("sparse_infill_filament"))
             resolved.set_key_value("sparse_infill_filament", new ConfigOptionInt(extruder));
         if (!resolved.has("solid_infill_filament"))
@@ -4790,10 +4835,13 @@ if (is_marlin_flavor)
     // Orca: build missed extruder pages
     for (auto extruder_idx = m_extruders_count_old; extruder_idx < m_extruders_count; ++extruder_idx) {
         // auto extruder_idx = 0;
-        const wxString& page_name = wxString::Format(_L("Extruder %d"), int(extruder_idx + 1));
+        const wxString page_name = extruder_page_title(m_config, extruder_idx);
         bool page_exist = false;
         for (auto page_temp : m_pages) {
-            if (page_temp->title() == page_name) {
+            size_t page_extruder_idx = 0;
+            if (extruder_idx_from_page_title(page_temp->title(), m_extruders_count, page_extruder_idx) &&
+                page_extruder_idx == extruder_idx) {
+                page_temp->set_title(page_name);
                 page_exist = true;
                 break;
             }
@@ -4812,7 +4860,7 @@ if (is_marlin_flavor)
                 optgroup->m_on_change = [this, extruder_idx](const t_config_option_key& opt_key, boost::any value)
                 {
                     bool is_SEMM = m_config->opt_bool("single_extruder_multi_material");
-                    if (is_SEMM && m_extruders_count > 1 && opt_key.find_first_of("nozzle_diameter") != std::string::npos)
+                    if (is_SEMM && m_extruders_count > 1 && opt_key == "nozzle_diameter")
                     {
                         SuppressBackgroundProcessingUpdate sbpu;
                         const double new_nd = boost::any_cast<double>(value);
@@ -4844,7 +4892,7 @@ if (is_marlin_flavor)
 
                     update_dirty();
                     update();
-                    if (opt_key.find("nozzle_diameter") != std::string::npos)
+                    if (opt_key == "nozzle_diameter")
                         validate_filament_hot_bed_nozzle_relation(parent());
                 };
 
@@ -4950,6 +4998,25 @@ void TabPrinter::on_preset_loaded()
     extruders_count_changed(extruders_count);
 }
 
+void TabPrinter::update_extruder_page_titles()
+{
+    bool changed = false;
+    for (auto& page : m_pages) {
+        size_t extruder_idx = 0;
+        if (!extruder_idx_from_page_title(page->title(), m_extruders_count, extruder_idx))
+            continue;
+
+        const wxString expected_title = extruder_page_title(m_config, extruder_idx);
+        if (page->title() != expected_title) {
+            page->set_title(expected_title);
+            changed = true;
+        }
+    }
+
+    if (changed)
+        rebuild_page_tree();
+}
+
 void TabPrinter::update_pages()
 {
     // update m_pages ONLY if printer technology is changed
@@ -4990,6 +5057,7 @@ void TabPrinter::update_pages()
 
 void TabPrinter::reload_config()
 {
+    update_extruder_page_titles();
     Tab::reload_config();
 
     // "extruders_count" doesn't update from the update_config(),
@@ -5063,13 +5131,10 @@ void TabPrinter::toggle_options()
         toggle_option("manual_filament_change", bSEMM);
         toggle_option("purge_in_prime_tower", bSEMM && !is_BBL_printer);
     }
-    wxString extruder_number;
-    long val = 1;
-    if ( m_active_page->title().IsSameAs(L("Extruder")) ||
-        (m_active_page->title().StartsWith("Extruder ", &extruder_number) && extruder_number.ToLong(&val) &&
-        val > 0 && (size_t)val <= m_extruders_count))
+    size_t extruder_idx = 0;
+    if (extruder_idx_from_page_title(m_active_page->title(), m_extruders_count, extruder_idx))
     {
-        size_t i = size_t(val - 1);
+        size_t i = extruder_idx;
         bool have_retract_length = m_config->opt_float("retraction_length", i) > 0;
 
         // when using firmware retraction, firmware decides retraction length
@@ -5346,7 +5411,7 @@ void Tab::rebuild_page_tree()
         m_tabctrl->SetItemTextColour(curr_item, p->get_item_colour() == m_modified_label_clr ? p->get_item_colour() : StateColor(
                         std::make_pair(0x6B6B6C, (int) StateColor::NotChecked),
                         std::make_pair(p->get_item_colour(), (int) StateColor::Normal)));
-        if (translate_category(p->title(), m_type) == selected)
+        if (p.get() == m_active_page || translate_category(p->title(), m_type) == selected)
             item = curr_item;
         curr_item++;
     }
@@ -6702,6 +6767,13 @@ Page::Page(wxWindow* parent, const wxString& title, int iconID, wxPanel* tab_own
     m_vsizer = (wxBoxSizer*)parent->GetSizer();
     m_page_title = NULL;
     m_item_color = &wxGetApp().get_label_clr_default();
+}
+
+void Page::set_title(const wxString& title)
+{
+    m_title = title;
+    if (m_page_title != nullptr)
+        m_page_title->SetLabel(_(m_title));
 }
 
 void Page::reload_config()

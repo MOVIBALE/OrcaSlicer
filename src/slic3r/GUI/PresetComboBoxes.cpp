@@ -1402,7 +1402,10 @@ void PlaterPresetComboBox::update()
         std::string currentNozzleInfo;
         if (const auto* nd_opt = m_preset_bundle->printers.get_edited_preset().config.option<ConfigOptionFloats>("nozzle_diameter");
             nd_opt && !nd_opt->values.empty()) {
-            currentNozzleInfo = float_to_string_decimal_point(nd_opt->values.front(), 2);
+            size_t nozzle_idx = 0;
+            if (m_filament_idx >= 0)
+                nozzle_idx = std::min<size_t>(size_t(m_filament_idx), nd_opt->values.size() - 1);
+            currentNozzleInfo = float_to_string_decimal_point(nd_opt->values[nozzle_idx], 2);
             while (!currentNozzleInfo.empty() && currentNozzleInfo.back() == '0')
                 currentNozzleInfo.pop_back();
             if (!currentNozzleInfo.empty() && currentNozzleInfo.back() == '.')
@@ -1974,7 +1977,10 @@ void TabPresetComboBox::update()
         std::string currentNozzleInfo;
         if (const auto* nd_opt = m_preset_bundle->printers.get_edited_preset().config.option<ConfigOptionFloats>("nozzle_diameter");
             nd_opt && !nd_opt->values.empty()) {
-            currentNozzleInfo = float_to_string_decimal_point(nd_opt->values.front(), 2);
+            size_t nozzle_idx = 0;
+            if (m_filament_idx >= 0)
+                nozzle_idx = std::min<size_t>(size_t(m_filament_idx), nd_opt->values.size() - 1);
+            currentNozzleInfo = float_to_string_decimal_point(nd_opt->values[nozzle_idx], 2);
             while (!currentNozzleInfo.empty() && currentNozzleInfo.back() == '0')
                 currentNozzleInfo.pop_back();
             if (!currentNozzleInfo.empty() && currentNozzleInfo.back() == '.')

@@ -69,16 +69,16 @@ typedef union
 	struct
 	{
 		unsigned int type : 4;	/**< message type nibble */
-		bool dup : 1;			/**< DUP flag bit */
+		unsigned int dup : 1;	/**< DUP flag bit */
 		unsigned int qos : 2;	/**< QoS value, 0, 1 or 2 */
-		bool retain : 1;		/**< retained flag bit */
+		unsigned int retain : 1;	/**< retained flag bit */
 	} bits;
 #else
 	struct
 	{
-		bool retain : 1;		/**< retained flag bit */
+		unsigned int retain : 1;	/**< retained flag bit */
 		unsigned int qos : 2;	/**< QoS value, 0, 1 or 2 */
-		bool dup : 1;			/**< DUP flag bit */
+		unsigned int dup : 1;	/**< DUP flag bit */
 		unsigned int type : 4;	/**< message type nibble */
 	} bits;
 #endif
@@ -97,24 +97,24 @@ typedef struct
 #if defined(REVERSED)
 		struct
 		{
-			bool username : 1;			/**< 3.1 user name */
-			bool password : 1; 			/**< 3.1 password */
-			bool willRetain : 1;		/**< will retain setting */
+			unsigned int username : 1;		/**< 3.1 user name */
+			unsigned int password : 1; 		/**< 3.1 password */
+			unsigned int willRetain : 1;		/**< will retain setting */
 			unsigned int willQoS : 2;	/**< will QoS value */
-			bool will : 1;			/**< will flag */
-			bool cleanstart : 1;	/**< cleansession flag */
+			unsigned int will : 1;		/**< will flag */
+			unsigned int cleanstart : 1;	/**< cleansession flag */
 			int : 1;	/**< unused */
 		} bits;
 #else
 		struct
 		{
 			int : 1;	/**< unused */
-			bool cleanstart : 1;	/**< cleansession flag */
-			bool will : 1;			/**< will flag */
+			unsigned int cleanstart : 1;	/**< cleansession flag */
+			unsigned int will : 1;		/**< will flag */
 			unsigned int willQoS : 2;	/**< will QoS value */
-			bool willRetain : 1;		/**< will retain setting */
-			bool password : 1; 			/**< 3.1 password */
-			bool username : 1;			/**< 3.1 user name */
+			unsigned int willRetain : 1;	/**< will retain setting */
+			unsigned int password : 1; 		/**< 3.1 password */
+			unsigned int username : 1;		/**< 3.1 user name */
 		} bits;
 #endif
 	} flags;	/**< connect flags byte */
@@ -142,12 +142,12 @@ typedef struct
 		struct
 		{
 			unsigned int reserved : 7;	/**< message type nibble */
-			bool sessionPresent : 1;    /**< was a session found on the server? */
+			unsigned int sessionPresent : 1; /**< was a session found on the server? */
 		} bits;
 #else
 		struct
 		{
-			bool sessionPresent : 1;    /**< was a session found on the server? */
+			unsigned int sessionPresent : 1; /**< was a session found on the server? */
 			unsigned int reserved : 7;	/**< message type nibble */
 		} bits;
 #endif

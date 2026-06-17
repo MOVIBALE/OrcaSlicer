@@ -3276,6 +3276,14 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionBool(false));
 
+    def = this->add("inner_wall_combination", coBool);
+    def->label = L("Inner wall combination");
+    def->category = L("Strength");
+    def->tooltip = L("Automatically combine inner walls of several fine layers and print them together at a larger layer height. "
+                     "Outer walls are still printed at the original fine layer height.");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionBool(false));
+
     def           = this->add("infill_shift_step", coFloat);
     def->label    = L("Infill shift step");
     def->category = L("Strength");
@@ -3395,6 +3403,16 @@ void PrintConfigDef::init_fff_params()
                      "The number of layers over which infill is combined is derived by dividing this value with the layer height and rounded down to the nearest decimal.\n\n"
                      "Use either absolute mm values (eg. 0.32mm for a 0.4mm nozzle) or % values (eg 80%). This value must not be larger "
                      "than the nozzle diameter.");
+    def->sidetext = L("mm or %");
+    def->min = 0;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloatOrPercent(100., true));
+
+    def = this->add("inner_wall_combination_max_layer_height", coFloatOrPercent);
+    def->label = L("Inner wall combination - Max layer height");
+    def->category = L("Strength");
+    def->tooltip = L("Maximum layer height for combined inner walls.\n\n"
+                     "For mixed nozzle printing, set this to the coarse nozzle layer height, for example 0.2 mm when outer walls use 0.1 mm layers.");
     def->sidetext = L("mm or %");
     def->min = 0;
     def->mode = comAdvanced;
@@ -4147,6 +4165,15 @@ void PrintConfigDef::init_fff_params()
     def->min = 1;
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionInt(1));
+
+    def = this->add("outer_wall_filament", coInt);
+    def->gui_type = ConfigOptionDef::GUIType::i_enum_open;
+    def->label = L("Outer wall");
+    def->category = L("Extruders");
+    def->tooltip = L("Filament to print outer walls. Set to Default to use the Walls filament.");
+    def->min = 0;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionInt(0));
 
     def = this->add("inner_wall_line_width", coFloatOrPercent);
     def->label = L("Inner wall");
@@ -7149,6 +7176,8 @@ void PrintConfigDef::handle_legacy(t_config_option_key &opt_key, std::string &va
         opt_key = "sparse_infill_filament";
     }else if (opt_key == "solid_infill_extruder") {
         opt_key = "solid_infill_filament";
+    }else if (opt_key == "external_perimeter_extruder") {
+        opt_key = "outer_wall_filament";
     }else if (opt_key == "perimeter_extruder") {
         opt_key = "wall_filament";
     }else if(opt_key == "wipe_tower_extruder") {
@@ -7414,10 +7443,13 @@ void DynamicPrintConfig::normalize_fdm(int used_filaments)
 
     if (this->has("wipe_tower_filament")) {
         // If invalid, replace with 0.
-        int extruder      = this->opt<ConfigOptionInt>("wipe_tower_filament")->value;
-        int num_extruders = this->opt<ConfigOptionFloats>("nozzle_diameter")->size();
-        if (extruder < 0 || extruder > num_extruders)
-            this->option("wipe_tower_filament")->setInt(0);
+        int extruder = this->opt<ConfigOptionInt>("wipe_tower_filament")->value;
+        const ConfigOptionFloats* nozzle_diameter = this->opt<ConfigOptionFloats>("nozzle_diameter");
+        if (nozzle_diameter != nullptr) {
+            int num_extruders = nozzle_diameter->size();
+            if (extruder < 0 || extruder > num_extruders)
+                this->option("wipe_tower_filament")->setInt(0);
+        }
     }
 
     if (!this->has("solid_infill_filament") && this->has("sparse_infill_filament"))

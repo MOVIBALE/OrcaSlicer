@@ -2223,8 +2223,32 @@ unsigned int PresetBundle::sync_ams_list(unsigned int &unknowns)
             return f.is_compatible && filaments.get_preset_base(f) == &f && f.filament_id == filament_id; });
         if (iter == filaments.end()) {
             BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(": filament_id %1% not found or system or compatible") % filament_id;
+            bool matched_by_machine_name = false;
+            auto machine_filament_name = ams.opt_string("filament_name", 0u);
+            auto machine_nozzle        = ams.opt_string("nozzle_diameter", 0u);
+            if (!machine_filament_name.empty()) {
+                std::vector<std::string> candidates;
+                if (!machine_nozzle.empty()) {
+                    candidates.push_back(machine_filament_name + " @U1 " + machine_nozzle + " nozzle");
+                    candidates.push_back(machine_filament_name + " @U1 " + machine_nozzle);
+                }
+                candidates.push_back(machine_filament_name + " @U1");
+                candidates.push_back(machine_filament_name);
+
+                auto find_named_preset = [this, &candidates](bool compatible_only) {
+                    return std::find_if(filaments.begin(), filaments.end(), [&candidates, compatible_only](auto &f) {
+                        return (!compatible_only || f.is_compatible) && f.is_system
+                            && std::find(candidates.begin(), candidates.end(), f.name) != candidates.end();
+                    });
+                };
+
+                iter = find_named_preset(true);
+                if (iter == filaments.end())
+                    iter = find_named_preset(false);
+                matched_by_machine_name = iter != filaments.end();
+            }
             auto filament_type = ams.opt_string("filament_type", 0u);
-            if (!filament_type.empty()) {
+            if (iter == filaments.end() && !filament_type.empty()) {
                 filament_type = "Generic " + filament_type;
                 iter = std::find_if(filaments.begin(), filaments.end(), [&filament_type](auto &f) {
                     return f.is_compatible && f.is_system
@@ -2245,7 +2269,8 @@ unsigned int PresetBundle::sync_ams_list(unsigned int &unknowns)
                 if (iter == filaments.end())
                     continue;
             }
-            ++unknowns;
+            if (!matched_by_machine_name)
+                ++unknowns;
             filament_id = iter->filament_id;
         }
         filament_presets.push_back(iter->name);
@@ -2633,7 +2658,7 @@ DynamicPrintConfig PresetBundle::full_fff_config() const
     //BBS: add logic for settings check between different system presets
     out.erase("different_settings_to_system");
 
-    static const char* keys[] = {"support_filament", "support_interface_filament", "wipe_tower_filament"};
+    static const char* keys[] = {"outer_wall_filament", "support_filament", "support_interface_filament", "wipe_tower_filament"};
     for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); ++ i) {
         std::string key = std::string(keys[i]);
         auto *opt = dynamic_cast<ConfigOptionInt*>(out.option(key, false));

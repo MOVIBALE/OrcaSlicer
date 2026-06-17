@@ -87,3 +87,44 @@ SCENARIO("PrintObject: object layer heights", "[PrintObject]") {
 #endif
     }
 }
+
+SCENARIO("PrintObject: default object extruder preserves role filament mapping", "[PrintObject]") {
+    GIVEN("A 20mm cube with the object defaulted to extruder 1 and role-specific filament settings") {
+        Slic3r::DynamicPrintConfig config = Slic3r::DynamicPrintConfig::full_print_config();
+        config.set_deserialize_strict({
+            { "wall_loops", 3 },
+            { "sparse_infill_density", 15 },
+            { "outer_wall_filament", 1 },
+            { "wall_filament", 2 },
+            { "sparse_infill_filament", 2 },
+            { "solid_infill_filament", 2 }
+        });
+        config.option<ConfigOptionFloats>("filament_diameter")->values = { 1.75, 1.75 };
+        config.option<ConfigOptionFloats>("nozzle_diameter")->values = { 0.2, 0.4 };
+        config.option<ConfigOptionStrings>("filament_colour")->values = { "#111111", "#222222" };
+
+        Slic3r::Print print;
+        Slic3r::Model model;
+        Slic3r::ModelObject *object = model.add_object();
+        object->name = "cube";
+        object->add_volume(Slic3r::Test::mesh(TestMesh::cube_20x20x20));
+        object->add_instance();
+        object->config.set_key_value("extruder", new ConfigOptionInt(1));
+        object->ensure_on_bed();
+
+        print.apply(model, config);
+        print.validate();
+        print.set_status_silent();
+        print.process();
+
+        THEN("The generated print region keeps the process-level role filament split") {
+            auto regions = print.objects().front()->all_regions();
+            REQUIRE(!regions.empty());
+            const PrintRegionConfig &region_config = regions.front().get().config();
+            CHECK(region_config.outer_wall_filament.value == 1);
+            CHECK(region_config.wall_filament.value == 2);
+            CHECK(region_config.sparse_infill_filament.value == 2);
+            CHECK(region_config.solid_infill_filament.value == 2);
+        }
+    }
+}

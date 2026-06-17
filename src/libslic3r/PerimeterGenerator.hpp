@@ -101,6 +101,7 @@ public:
         double                      layer_height,
         coordf_t                    slice_z,
         Flow                        flow,
+        Flow                        ext_flow,
         const PrintRegionConfig*    config,
         const PrintObjectConfig*    object_config,
         const PrintConfig*          print_config,
@@ -115,7 +116,7 @@ public:
         //BBS
         ExPolygons*                 fill_no_overlap)
         : slices(slices), compatible_regions(compatible_regions), upper_slices(nullptr), lower_slices(nullptr), layer_height(layer_height),
-            slice_z(slice_z), layer_id(-1), perimeter_flow(flow), ext_perimeter_flow(flow),
+            slice_z(slice_z), layer_id(-1), perimeter_flow(flow), ext_perimeter_flow(ext_flow),
             overhang_flow(flow), solid_infill_flow(flow),
             config(config), object_config(object_config), print_config(print_config),
             m_spiral_vase(spiral_mode),
@@ -137,7 +138,7 @@ public:
     Polygons    lower_slices_polygons() const { return m_lower_slices_polygons; }
 
 private:
-    std::vector<Polygons>     generate_lower_polygons_series(float width);
+    std::vector<Polygons>     generate_lower_polygons_series(float width, float nozzle_diameter);
     void split_top_surfaces(const ExPolygons &orig_polygons, ExPolygons &top_fills, ExPolygons &non_top_polygons, ExPolygons &fill_clip) const;
     void apply_extra_perimeters(ExPolygons& infill_area);
     void process_no_bridge(Surfaces& all_surfaces, coord_t perimeter_spacing, coord_t ext_perimeter_width);

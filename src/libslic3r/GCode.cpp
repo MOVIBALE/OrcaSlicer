@@ -4258,6 +4258,35 @@ static bool split_extrusion_collection_for_pointillism_paths(
     return out_stats.segment_count > 0;
 }
 
+static bool split_perimeter_collection_by_outer_wall_role(
+    const ExtrusionEntityCollection&       source,
+    std::unique_ptr<ExtrusionEntityCollection>& outer_wall,
+    std::unique_ptr<ExtrusionEntityCollection>& inner_wall)
+{
+    outer_wall.reset();
+    inner_wall.reset();
+
+    if (source.entities.empty())
+        return false;
+
+    auto append_to = [&source](std::unique_ptr<ExtrusionEntityCollection>& dst, const ExtrusionEntity& entity) {
+        if (!dst) {
+            dst = std::make_unique<ExtrusionEntityCollection>();
+            dst->no_sort = source.no_sort;
+        }
+        dst->append(entity);
+    };
+
+    for (const ExtrusionEntity* entity : source.entities) {
+        if (entity->role() == erExternalPerimeter)
+            append_to(outer_wall, *entity);
+        else
+            append_to(inner_wall, *entity);
+    }
+
+    return outer_wall && inner_wall;
+}
+
 static bool split_extrusion_collection_for_multi_perimeter_pattern(
     const ExtrusionEntityCollection&                         source,
     const MixedFilamentManager&                              mixed_mgr,
@@ -5018,9 +5047,14 @@ LayerResult GCode::process_layer(const Print& print,
     size_t pointillism_path_split_segments  = 0;
     size_t pointillism_path_split_fallbacks = 0;
 
-    auto configured_filament_id_1based = [&layer_tools](const GCode::ObjectByExtruder::Island::Region::Type entity_type,
-                                                        const ExtrusionEntityCollection&                    entities,
-                                                        const PrintRegion&                                  region) -> unsigned int {
+    auto outer_wall_filament_id_1based = [](const PrintRegion& region) -> unsigned int {
+        const int outer_wall_filament = region.config().outer_wall_filament.value;
+        return unsigned(outer_wall_filament > 0 ? outer_wall_filament : region.config().wall_filament.value);
+    };
+
+    auto configured_filament_id_1based = [&layer_tools, &outer_wall_filament_id_1based](const GCode::ObjectByExtruder::Island::Region::Type entity_type,
+                                                                                       const ExtrusionEntityCollection&                    entities,
+                                                                                       const PrintRegion&                                  region) -> unsigned int {
         if (entity_type == GCode::ObjectByExtruder::Island::Region::INFILL) {
             if (layer_tools.extruder_override != 0)
                 return layer_tools.extruder_override;
@@ -5031,6 +5065,8 @@ LayerResult GCode::process_layer(const Print& print,
                 return unsigned(region.config().solid_infill_filament.value);
             return unsigned(region.config().sparse_infill_filament.value);
         }
+        if (entities.role() == erExternalPerimeter)
+            return layer_tools.extruder_override == 0 ? outer_wall_filament_id_1based(region) : layer_tools.extruder_override;
         return layer_tools.extruder_override == 0 ? unsigned(region.config().wall_filament.value) : layer_tools.extruder_override;
     };
 
@@ -5045,7 +5081,7 @@ LayerResult GCode::process_layer(const Print& print,
                 return int(layer_tools.solid_infill_filament(region));
             return int(layer_tools.sparse_infill_filament(region));
         }
-        return int(layer_tools.wall_filament(region));
+        return entities.role() == erExternalPerimeter ? int(layer_tools.outer_wall_filament(region)) : int(layer_tools.wall_filament(region));
     };
 
     auto pointillism_sequence_for_filament = [&](unsigned int filament_id_1based) -> const std::vector<unsigned int>* {
@@ -5583,6 +5619,42 @@ LayerResult GCode::process_layer(const Print& print,
                             }
                             filtered_extrusions = clipped_base.get();
                             local_z_clipped_collections.emplace_back(std::move(clipped_base));
+                        }
+
+                        if (!is_anything_overridden &&
+                            entity_type == ObjectByExtruder::Island::Region::PERIMETERS &&
+                            layer_tools.extruder_override == 0 &&
+                            region.config().outer_wall_filament.value > 0 &&
+                            region.config().outer_wall_filament.value != region.config().wall_filament.value) {
+                            std::unique_ptr<ExtrusionEntityCollection> outer_wall_extrusions;
+                            std::unique_ptr<ExtrusionEntityCollection> inner_wall_extrusions;
+                            if (split_perimeter_collection_by_outer_wall_role(*filtered_extrusions, outer_wall_extrusions, inner_wall_extrusions)) {
+                                auto append_split_collection =
+                                    [&](unsigned int extruder, std::unique_ptr<ExtrusionEntityCollection>& split_collection) {
+                                        if (!split_collection || split_collection->entities.empty())
+                                            return;
+                                        const ExtrusionEntityCollection* split_ptr = split_collection.get();
+                                        local_z_clipped_collections.emplace_back(std::move(split_collection));
+                                        if (!layer_tools.has_extruder(extruder))
+                                            extruder = layer_tools.extruders.empty() ? extruder : layer_tools.extruders.back();
+                                        std::vector<ObjectByExtruder::Island>& islands =
+                                            object_islands_by_extruder(by_extruder, extruder, layer_to_print_idx, layers.size(), n_slices + 1);
+                                        for (size_t i = 0; i <= n_slices; ++i) {
+                                            const bool   last       = i == n_slices;
+                                            const size_t island_idx = last ? n_slices : slices_test_order[i];
+                                            if (last || entity_matches_surface(island_idx, *split_ptr)) {
+                                                if (islands[island_idx].by_region.empty())
+                                                    islands[island_idx].by_region.assign(print.num_print_regions(), ObjectByExtruder::Island::Region());
+                                                islands[island_idx].by_region[region.print_region_id()].append(entity_type, split_ptr, nullptr);
+                                                break;
+                                            }
+                                        }
+                                    };
+
+                                append_split_collection(layer_tools.wall_filament(region), inner_wall_extrusions);
+                                append_split_collection(layer_tools.outer_wall_filament(region), outer_wall_extrusions);
+                                continue;
+                            }
                         }
 
                         const unsigned int configured_filament_id = configured_filament_id_1based(entity_type, *filtered_extrusions, region);

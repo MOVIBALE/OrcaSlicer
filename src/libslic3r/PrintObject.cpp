@@ -6,6 +6,7 @@
 #include "Geometry.hpp"
 #include "I18N.hpp"
 #include "Layer.hpp"
+#include "MixedLayerHeight.hpp"
 #include "MutablePolygon.hpp"
 #include "PrintConfig.hpp"
 #include "Support/SupportMaterial.hpp"
@@ -71,6 +72,90 @@ using namespace std::literals;
 #endif
 
 namespace Slic3r {
+
+namespace {
+
+void scale_mixed_layer_internal_wall_path(ExtrusionPath &path, const double combined_height)
+{
+    if (path.role() != erPerimeter || path.height <= EPSILON || combined_height <= path.height + EPSILON)
+        return;
+
+    const double ratio = combined_height / double(path.height);
+    path.mm3_per_mm *= ratio;
+    path.height = float(combined_height);
+}
+
+void scale_mixed_layer_internal_wall_entity(ExtrusionEntity &entity, const double combined_height)
+{
+    if (auto *sloped_loop = dynamic_cast<ExtrusionLoopSloped*>(&entity)) {
+        for (ExtrusionPath &path : sloped_loop->paths)
+            scale_mixed_layer_internal_wall_path(path, combined_height);
+        for (ExtrusionPathSloped &path : sloped_loop->starts)
+            scale_mixed_layer_internal_wall_path(path, combined_height);
+        for (ExtrusionPathSloped &path : sloped_loop->ends)
+            scale_mixed_layer_internal_wall_path(path, combined_height);
+    } else if (auto *loop = dynamic_cast<ExtrusionLoop*>(&entity)) {
+        for (ExtrusionPath &path : loop->paths)
+            scale_mixed_layer_internal_wall_path(path, combined_height);
+    } else if (auto *multipath = dynamic_cast<ExtrusionMultiPath*>(&entity)) {
+        for (ExtrusionPath &path : multipath->paths)
+            scale_mixed_layer_internal_wall_path(path, combined_height);
+    } else if (auto *path = dynamic_cast<ExtrusionPath*>(&entity)) {
+        scale_mixed_layer_internal_wall_path(*path, combined_height);
+    } else if (auto *collection = dynamic_cast<ExtrusionEntityCollection*>(&entity)) {
+        for (ExtrusionEntity *child : collection->entities)
+            scale_mixed_layer_internal_wall_entity(*child, combined_height);
+    }
+}
+
+void scale_mixed_layer_internal_walls(ExtrusionEntityCollection &collection, const double combined_height)
+{
+    for (ExtrusionEntity *entity : collection.entities)
+        scale_mixed_layer_internal_wall_entity(*entity, combined_height);
+}
+
+void remove_mixed_layer_internal_walls(ExtrusionEntityCollection &collection)
+{
+    for (auto it = collection.entities.begin(); it != collection.entities.end();) {
+        ExtrusionEntity *entity = *it;
+        if (entity->role() == erPerimeter) {
+            delete entity;
+            it = collection.entities.erase(it);
+            continue;
+        }
+
+        if (auto *child_collection = dynamic_cast<ExtrusionEntityCollection*>(entity)) {
+            remove_mixed_layer_internal_walls(*child_collection);
+            if (child_collection->empty()) {
+                delete child_collection;
+                it = collection.entities.erase(it);
+                continue;
+            }
+        }
+
+        ++it;
+    }
+}
+
+std::vector<double> print_object_layer_heights(const LayerPtrs &layers)
+{
+    std::vector<double> heights;
+    heights.reserve(layers.size());
+    for (const Layer *layer : layers)
+        heights.push_back(layer->height);
+    return heights;
+}
+
+double mixed_layer_group_height(const LayerPtrs &layers, const size_t target_layer_idx, const size_t num_layers)
+{
+    double height = 0.;
+    const size_t first_layer_idx = target_layer_idx + 1 - num_layers;
+    for (size_t layer_idx = first_layer_idx; layer_idx <= target_layer_idx; ++layer_idx)
+        height += layers[layer_idx]->height;
+    return height;
+}
+
+} // namespace
 
 // Constructor is called from the main thread, therefore all Model / ModelObject / ModelIntance data are valid.
 PrintObject::PrintObject(Print* print, ModelObject* model_object, const Transform3d& trafo, PrintInstances&& instances) :
@@ -393,6 +478,9 @@ void PrintObject::make_perimeters()
     );
     m_print->throw_if_canceled();
     BOOST_LOG_TRIVIAL(debug) << "Generating perimeters in parallel - end";
+
+    this->combine_internal_walls();
+    m_print->throw_if_canceled();
 
     this->set_done(posPerimeters);
 }
@@ -915,6 +1003,8 @@ bool PrintObject::invalidate_state_by_config_options(
             || opt_key == "detect_overhang_wall"
             || opt_key == "initial_layer_line_width"
             || opt_key == "inner_wall_line_width"
+            || opt_key == "inner_wall_combination"
+            || opt_key == "inner_wall_combination_max_layer_height"
             || opt_key == "infill_wall_overlap"
             || opt_key == "top_bottom_infill_wall_overlap"
             || opt_key == "seam_gap"
@@ -1151,6 +1241,7 @@ bool PrintObject::invalidate_state_by_config_options(
             steps.emplace_back(posPrepareInfill);
         } else if (
                opt_key == "outer_wall_line_width"
+            || opt_key == "outer_wall_filament"
             || opt_key == "wall_filament"
             || opt_key == "fuzzy_skin"
             || opt_key == "fuzzy_skin_thickness"
@@ -3205,7 +3296,27 @@ PrintObjectConfig PrintObject::object_config_from_model_object(const PrintObject
 }
 
 const std::string                                                    key_extruder { "extruder" };
-static constexpr const std::initializer_list<const std::string_view> keys_extruders { "sparse_infill_filament"sv, "solid_infill_filament"sv, "wall_filament"sv };
+static constexpr const std::initializer_list<const std::string_view> keys_extruders { "sparse_infill_filament"sv, "solid_infill_filament"sv, "wall_filament"sv, "outer_wall_filament"sv };
+
+static bool has_role_filament_override(const DynamicPrintConfig &config)
+{
+    for (const std::string_view key : keys_extruders)
+        if (config.has(std::string(key)))
+            return true;
+    return false;
+}
+
+static bool has_role_specific_filaments(const PrintRegionConfig &config)
+{
+    const int wall   = config.wall_filament.value;
+    const int outer  = config.outer_wall_filament.value > 0 ? config.outer_wall_filament.value : wall;
+    const int sparse = config.sparse_infill_filament.value;
+    const int solid  = config.solid_infill_filament.value;
+
+    return (outer > 0 && wall > 0 && outer != wall) ||
+           (sparse > 0 && wall > 0 && sparse != wall) ||
+           (solid > 0 && wall > 0 && solid != wall);
+}
 
 static void apply_to_print_region_config(PrintRegionConfig &out, const DynamicPrintConfig &in)
 {
@@ -3213,10 +3324,15 @@ static void apply_to_print_region_config(PrintRegionConfig &out, const DynamicPr
     auto *opt_extruder = in.opt<ConfigOptionInt>(key_extruder);
     if (opt_extruder)
         if (int extruder = opt_extruder->value; extruder != 0) {
-            // Not a default extruder.
-            out.sparse_infill_filament.value = extruder;
-            out.solid_infill_filament.value  = extruder;
-            out.wall_filament.value          = extruder;
+            const bool preserve_global_role_mapping =
+                extruder == 1 && has_role_specific_filaments(out) && !has_role_filament_override(in);
+            if (!preserve_global_role_mapping) {
+                // Not a default extruder.
+                out.sparse_infill_filament.value = extruder;
+                out.solid_infill_filament.value  = extruder;
+                out.wall_filament.value          = extruder;
+                out.outer_wall_filament.value    = extruder;
+            }
         }
     // 2) Copy the rest of the values.
     for (auto it = in.cbegin(); it != in.cend(); ++ it)
@@ -3253,6 +3369,7 @@ PrintRegionConfig region_config_from_model_volume(const PrintRegionConfig &defau
     // Clamp invalid extruders to the default extruder (with index 1).
     clamp_exturder_to_default(config.sparse_infill_filament,       num_extruders);
     clamp_exturder_to_default(config.wall_filament,    num_extruders);
+    clamp_exturder_to_default(config.outer_wall_filament, num_extruders);
     clamp_exturder_to_default(config.solid_infill_filament, num_extruders);
     if (config.sparse_infill_density.value < 0.00011f)
         // Switch of infill for very low infill rates, also avoid division by zero in infill generator for these very low rates.
@@ -3317,6 +3434,7 @@ SlicingParameters PrintObject::slicing_parameters(const DynamicPrintConfig &full
 				object_extruders);
 			for (const std::pair<const t_layer_height_range, ModelConfig> &range_and_config : model_object.layer_config_ranges)
 				if (range_and_config.second.has("wall_filament") ||
+                    range_and_config.second.has("outer_wall_filament") ||
 					range_and_config.second.has("sparse_infill_filament") ||
 					range_and_config.second.has("solid_infill_filament"))
 					PrintRegion::collect_object_printing_extruders(
@@ -4285,7 +4403,11 @@ void PrintObject::combine_infill()
 
         // Limit the number of combined layers to the maximum height allowed by this regions' nozzle.
         //FIXME limit the layer height to max_layer_height
-        double nozzle_diameter = this->print()->config().nozzle_diameter.get_at(region.config().wall_filament.value - 1);
+        const int outer_wall_filament = region.config().outer_wall_filament.value > 0 ?
+                                            region.config().outer_wall_filament.value :
+                                            region.config().wall_filament.value;
+        double nozzle_diameter = this->print()->config().nozzle_diameter.get_at(outer_wall_filament - 1);
+        nozzle_diameter = std::min(nozzle_diameter, this->print()->config().nozzle_diameter.get_at(region.config().wall_filament.value - 1));
         nozzle_diameter = std::min(nozzle_diameter, this->print()->config().nozzle_diameter.get_at(region.config().sparse_infill_filament.value - 1));
         nozzle_diameter = std::min(nozzle_diameter, this->print()->config().nozzle_diameter.get_at(region.config().solid_infill_filament.value - 1));
         
@@ -4294,32 +4416,7 @@ void PrintObject::combine_infill()
         nozzle_diameter = infill_combination_max_layer_height > 0 ? std::min(infill_combination_max_layer_height, nozzle_diameter) : nozzle_diameter;
         
         // define the combinations
-        std::vector<size_t> combine(m_layers.size(), 0);
-        {
-            double current_height = 0.;
-            size_t num_layers = 0;
-            for (size_t layer_idx = 0; layer_idx < m_layers.size(); ++ layer_idx) {
-                m_print->throw_if_canceled();
-                const Layer *layer = m_layers[layer_idx];
-                if (layer->id() == 0)
-                    // Skip first print layer (which may not be first layer in array because of raft).
-                    continue;
-                // Check whether the combination of this layer with the lower layers' buffer
-                // would exceed max layer height or max combined layer count.
-                // BBS: automatically calculate how many layers should be combined
-                if (current_height + layer->height >= nozzle_diameter + EPSILON) {
-                    // Append combination to lower layer.
-                    combine[layer_idx - 1] = num_layers;
-                    current_height = 0.;
-                    num_layers = 0;
-                }
-                current_height += layer->height;
-                ++ num_layers;
-            }
-
-            // Append lower layers (if any) to uppermost layer.
-            combine[m_layers.size() - 1] = num_layers;
-        }
+        std::vector<size_t> combine = build_mixed_layer_height_spans(print_object_layer_heights(m_layers), nozzle_diameter, false);
 
         // loop through layers to which we have assigned layers to combine
         for (size_t layer_idx = 0; layer_idx < m_layers.size(); ++ layer_idx) {
@@ -4386,6 +4483,40 @@ void PrintObject::combine_infill()
                         stInternalVoid);
                 }
             }
+        }
+    }
+}
+
+void PrintObject::combine_internal_walls()
+{
+    if (m_layers.size() < 2)
+        return;
+
+    const std::vector<double> layer_heights = print_object_layer_heights(m_layers);
+
+    for (size_t region_id = 0; region_id < this->num_printing_regions(); ++region_id) {
+        const PrintRegion &region = this->printing_region(region_id);
+        if (!region.config().inner_wall_combination.value || region.config().wall_loops.value <= 1)
+            continue;
+
+        const int wall_filament = std::max(1, region.config().wall_filament.value);
+        double nozzle_diameter = this->print()->config().nozzle_diameter.get_at(wall_filament - 1);
+        const double max_layer_height = region.config().inner_wall_combination_max_layer_height.get_abs_value(nozzle_diameter);
+        nozzle_diameter = max_layer_height > 0. ? std::min(max_layer_height, nozzle_diameter) : nozzle_diameter;
+        if (nozzle_diameter <= 0.)
+            continue;
+
+        const std::vector<size_t> combine = build_mixed_layer_height_spans(layer_heights, nozzle_diameter, true);
+        for (size_t target_layer_idx = 0; target_layer_idx < combine.size(); ++target_layer_idx) {
+            const size_t num_layers = combine[target_layer_idx];
+            if (num_layers <= 1)
+                continue;
+
+            const size_t first_layer_idx = target_layer_idx + 1 - num_layers;
+            const double combined_height = mixed_layer_group_height(m_layers, target_layer_idx, num_layers);
+            for (size_t layer_idx = first_layer_idx; layer_idx < target_layer_idx; ++layer_idx)
+                remove_mixed_layer_internal_walls(m_layers[layer_idx]->regions()[region_id]->perimeters);
+            scale_mixed_layer_internal_walls(m_layers[target_layer_idx]->regions()[region_id]->perimeters, combined_height);
         }
     }
 }

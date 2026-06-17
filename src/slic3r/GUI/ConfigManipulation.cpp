@@ -553,8 +553,10 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, co
     bool have_perimeters = config->opt_int("wall_loops") > 0;
     for (auto el : { "extra_perimeters_on_overhangs", "ensure_vertical_shell_thickness", "detect_thin_wall", "detect_overhang_wall",
         "seam_position", "staggered_inner_seams", "wall_sequence", "outer_wall_line_width",
-        "inner_wall_speed", "outer_wall_speed", "small_perimeter_speed", "small_perimeter_threshold" })
+        "inner_wall_speed", "outer_wall_speed", "small_perimeter_speed", "small_perimeter_threshold",
+        "inner_wall_combination" })
         toggle_field(el, have_perimeters);
+    toggle_line("inner_wall_combination_max_layer_height", have_perimeters && config->opt_bool("inner_wall_combination"));
 
     bool have_infill = config->option<ConfigOptionPercent>("sparse_infill_density")->value > 0;
     // sparse_infill_filament uses the same logic as in Print::extruders()
@@ -654,6 +656,7 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, co
                            config->opt_enum<BrimType>("brim_type") != btPainted;
     toggle_field("brim_width", have_brim_width);
     // wall_filament uses the same logic as in Print::extruders()
+    toggle_field("outer_wall_filament", have_perimeters);
     toggle_field("wall_filament", have_perimeters || have_brim);
 
     bool have_brim_ear = (config->opt_enum<BrimType>("brim_type") == btEar);
@@ -760,7 +763,7 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, co
     for (auto el : { "prime_tower_width", "prime_tower_brim_width"})
         toggle_line(el, have_prime_tower);
 
-    for (auto el : {"wall_filament", "sparse_infill_filament", "solid_infill_filament", "wipe_tower_filament"})
+    for (auto el : {"outer_wall_filament", "wall_filament", "sparse_infill_filament", "solid_infill_filament", "wipe_tower_filament"})
         toggle_line(el, !bSEMM);
 
     bool purge_in_primetower = preset_bundle->printers.get_edited_preset().config.opt_bool("purge_in_prime_tower");

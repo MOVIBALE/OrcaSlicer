@@ -81,6 +81,15 @@ The object-role checker found no violations for the expected mapping:
 - sparse infill -> T0 / 0.4 mm
 - internal solid infill -> T0 / 0.4 mm
 
+## Real Print Validation
+
+A real Snapmaker U1 test print completed successfully on 2026-06-18 with the
+patched slicer and patched U1 firmware. The printed sample shows the mixed
+strategy working on hardware: fine outer shell behavior paired with the coarser
+internal grid/infill path.
+
+![Successful Snapmaker U1 mixed-nozzle print](assets/real-print-cube.jpg)
+
 ## Tests
 
 Local checks run on Windows:
@@ -89,6 +98,7 @@ Local checks run on Windows:
 - `libslic3r_tests.exe [MachineFilamentSync]`: passed, 17 assertions.
 - `libslic3r_tests.exe [MixedLayerHeight]`: passed, 7 assertions.
 - `Snapmaker_Orca_profile_validator.exe --vendor Snapmaker`: passed.
+- Real U1 mixed-nozzle test print: passed.
 
 Build warnings seen during local verification:
 
@@ -118,6 +128,8 @@ production profile set.
 - Prime tower, purge, and wipe behavior is not fully tuned for asymmetric
   0.2/0.4 mm tool changes.
 - Always keep a recovery path for U1 firmware before flashing test builds.
+- The first real print passed, but longer prints and complex geometry still
+  need validation.
 
 ## Suggested First Print
 

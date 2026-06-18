@@ -54,6 +54,7 @@ Local validation completed on Windows:
 - Focused `MixedLayerHeight` unit tests: passed.
 - Snapmaker profile validator: passed.
 - Cube G-code role inspection: passed.
+- Real Snapmaker U1 mixed-nozzle print on 2026-06-18: passed.
 
 G-code inspection results for the 0.10 mixed-layer cube:
 
@@ -62,6 +63,10 @@ G-code inspection results for the 0.10 mixed-layer cube:
 - sparse infill: T0, 0.4 mm nozzle, mostly 0.20 mm combined layers
 - internal solid infill: T0
 - no object extrusion on T2/T3
+
+Real print validation:
+
+![Successful Snapmaker U1 mixed-nozzle print](assets/real-print-cube.jpg)
 
 ## Compatibility Notes
 
@@ -74,8 +79,9 @@ Other nozzle pairings may work but have not been validated.
 
 ## Limitations
 
-- Experimental print quality. Tune speeds, temperature, flow, pressure advance,
-  wipe, and purge before long prints.
+- The first real print passed, but print quality is still experimental. Tune
+  speeds, temperature, flow, pressure advance, wipe, and purge before long
+  prints.
 - Mixed-layer internal walls are not geometry-aware across different Z slices
   yet. Complex sloped or thin geometry can still need slicer logic changes.
 - Preview and material summaries can be confusing when multiple slots use the

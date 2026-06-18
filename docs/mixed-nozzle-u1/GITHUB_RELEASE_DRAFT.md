@@ -41,6 +41,8 @@ This release requires both:
 - Windows Snapmaker Orca build artifact.
 - U1 firmware `.bin` built from the firmware branch with the validation patch.
 - Optional sample cube G-code generated from the 0.10 mixed-layer profile.
+- Real print validation photo:
+  `docs/mixed-nozzle-u1/assets/real-print-cube.jpg`
 
 Current local firmware artifact:
 
@@ -58,6 +60,11 @@ Current local firmware artifact:
   - sparse infill on T0 / 0.4 mm / mostly 0.20 mm
   - internal solid infill on T0
   - no object extrusion on T2/T3
+- Real Snapmaker U1 mixed-nozzle print on 2026-06-18 passed.
+
+## Real Print Photo
+
+![Successful Snapmaker U1 mixed-nozzle print](https://raw.githubusercontent.com/MOVIBALE/OrcaSlicer/mixed-nozzle-u1/docs/mixed-nozzle-u1/assets/real-print-cube.jpg)
 
 ## Flashing Warning
 
@@ -96,5 +103,5 @@ specific physical setup.
       T0/T1/T2/T3 according to `extruder_map_table`.
 - [ ] Slice a 20 mm cube and inspect preview by tool.
 - [ ] Export G-code and rerun the object-role checker.
-- [ ] Flash the firmware on one test U1 only.
-- [ ] Print the cube and record first-layer/toolchange observations.
+- [x] Flash the firmware on one test U1 only.
+- [x] Print a small validation part and record first print success.

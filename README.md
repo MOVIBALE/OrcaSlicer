@@ -4,6 +4,40 @@
 [![Build all](https://github.com/Snapmaker/OrcaSlicer/actions/workflows/build_all.yml/badge.svg?branch=main)](https://github.com/Snapmaker/OrcaSlicer/actions/workflows/build_all.yml)
 <br>Snapmaker Orca is an open source slicer for FDM printers based on OrcaSlicer.
  
+## mixed-nozzle-u1 Experimental Branch
+
+This fork branch contains an experimental Snapmaker U1 mixed-nozzle workflow.
+It is not an official Snapmaker release.
+
+The first validated target is:
+
+- 0.2 mm nozzle for visible outer walls.
+- 0.4 mm nozzle for inner walls and infill.
+- Optional mixed layer strategy: 0.10 mm outer walls with 0.20 mm combined inner walls/infill.
+
+Main changes in this branch:
+
+- U1 nozzle diameters can be edited independently per toolhead.
+- Nozzle tabs show the selected diameter.
+- `outer_wall_filament` routes external perimeters to a different tool than inner walls.
+- Printer filament sync reads U1 head-slot material/nozzle information and maps physical heads to logical T-slots through `extruder_map_table`.
+- Two starter U1 process profiles are included for same-layer and mixed-layer testing.
+- A matching U1 firmware validation patch is required for mixed-nozzle G-code.
+
+Real Snapmaker U1 mixed-nozzle print validation passed on 2026-06-18:
+
+![Successful Snapmaker U1 mixed-nozzle print](docs/mixed-nozzle-u1/assets/real-print-cube.jpg)
+
+Read the full mixed-nozzle notes before using this branch:
+
+- [Mixed-nozzle U1 README](docs/mixed-nozzle-u1/README.md)
+- [Release notes](docs/mixed-nozzle-u1/RELEASE_NOTES.md)
+- [GitHub release draft](docs/mixed-nozzle-u1/GITHUB_RELEASE_DRAFT.md)
+- Matching firmware branch: [MOVIBALE/SnapmakerU1-Extended-Firmware mixed-nozzle-u1](https://github.com/MOVIBALE/SnapmakerU1-Extended-Firmware/tree/mixed-nozzle-u1)
+
+Use this branch only if you can recover the printer firmware and are comfortable
+testing experimental slicer and firmware behavior.
+
 
 
 # Download

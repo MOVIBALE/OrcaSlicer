@@ -5,7 +5,7 @@
     "from": "system",
     "setting_id": "GP_U1_MIX_0204_012",
     "instantiation": "true",
-    "description": "Experimental profile for mixed nozzle printing on Snapmaker U1: T0 is used for outer walls, and T1 is used for inner walls and infill. Set each physical nozzle diameter independently in the printer panel.",
+    "description": "Experimental same-layer mixed-nozzle profile for Snapmaker U1: T0 is used for outer walls, and T1 is used for inner walls and infill. Set each physical nozzle diameter independently in the printer panel.",
     "compatible_printers": [
         "Snapmaker U1 (0.4 nozzle)"
     ],
@@ -22,6 +22,8 @@
     "wall_filament": "2",
     "sparse_infill_filament": "2",
     "solid_infill_filament": "2",
+    "mixed_nozzle_mode": "same_layer",
+    "mixed_nozzle_layer_height_ratio": "2",
     "outer_wall_speed": "80",
     "inner_wall_speed": "200",
     "sparse_infill_speed": "250",

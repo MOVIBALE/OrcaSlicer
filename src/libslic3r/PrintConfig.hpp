@@ -103,6 +103,12 @@ enum class WallSequence {
     Count,
 };
 
+enum class MixedNozzleMode {
+    SameLayer,
+    MixedLayer,
+    Count,
+};
+
 // Orca
 enum class WallDirection
 {
@@ -488,6 +494,7 @@ CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(PrintHostType)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(AuthorizationType)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(WipeTowerWallType)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(PerimeterGeneratorType)
+CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(MixedNozzleMode)
 
 #undef CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS
 
@@ -1026,6 +1033,8 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionFloatOrPercent,                infill_combination_max_layer_height))
     ((ConfigOptionBool, inner_wall_combination))
     ((ConfigOptionFloatOrPercent,                inner_wall_combination_max_layer_height))
+    ((ConfigOptionEnum<MixedNozzleMode>, mixed_nozzle_mode))
+    ((ConfigOptionInt, mixed_nozzle_layer_height_ratio))
     ((ConfigOptionInt,                  fill_multiline))
     // Ironing options
     ((ConfigOptionEnum<IroningType>, ironing_type))

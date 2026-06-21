@@ -10,6 +10,10 @@ std::vector<size_t> build_mixed_layer_height_spans(const std::vector<double>& la
                                                    double                     max_combined_height,
                                                    bool                       include_first_layer);
 
+double mixed_nozzle_combined_layer_height(double fine_layer_height,
+                                          double coarse_nozzle_diameter,
+                                          int    layer_ratio);
+
 } // namespace Slic3r
 
 #endif

@@ -15,7 +15,8 @@ Snapmaker U1 mixed-nozzle experimental build
 ## Summary
 
 Experimental Snapmaker U1 mixed-nozzle build for printing fine outer walls with
-a 0.2 mm nozzle and inner walls/infill with a 0.4 mm nozzle.
+one nozzle and inner walls/infill with another nozzle. The first real-print
+validated pairing is 0.2 mm outer walls plus 0.4 mm inner walls/infill.
 
 This release requires both:
 
@@ -28,12 +29,17 @@ This release requires both:
 - Nozzle diameter shown in each nozzle tab.
 - `outer_wall_filament` setting for routing external perimeters to a different
   tool than inner walls.
+- `mixed_nozzle_mode` selector:
+  - Same layer, different line widths
+  - Mixed layer, different line widths
+- `mixed_nozzle_layer_height_ratio` derives combined coarse-feature height from
+  the active fine layer height.
 - Machine filament sync from the connected U1.
 - Correct physical-head to logical T-slot filament mapping through
   `extruder_map_table`.
-- Experimental 0.10/0.20 mixed-layer profile:
+- Experimental mixed-layer profile example:
   `0.10 Mixed Layer Outer Nozzle2 Inner Nozzle1 @Snapmaker U1`.
-- Starter same-layer profile:
+- Same-layer profile example:
   `0.12 Mixed Nozzle Outer T0 Inner T1 @Snapmaker U1`.
 
 ## Assets To Attach
@@ -52,7 +58,7 @@ Current local firmware artifact:
 
 - Snapmaker Orca Release build passed.
 - `libslic3r_tests.exe [MachineFilamentSync]` passed, 17 assertions.
-- `libslic3r_tests.exe [MixedLayerHeight]` passed, 7 assertions.
+- `libslic3r_tests.exe [MixedLayerHeight]` passed, 11 assertions.
 - Snapmaker profile validator passed for the Snapmaker profile bundle.
 - 20 mm cube G-code inspection passed:
   - outer wall on T1 / 0.2 mm / 0.10 mm
@@ -60,6 +66,8 @@ Current local firmware artifact:
   - sparse infill on T0 / 0.4 mm / mostly 0.20 mm
   - internal solid infill on T0
   - no object extrusion on T2/T3
+  - `mixed_nozzle_mode = mixed_layer` drove the result with legacy
+    `inner_wall_combination` and `infill_combination` both disabled
 - Real Snapmaker U1 mixed-nozzle print on 2026-06-18 passed.
 
 ## Real Print Photo
@@ -93,6 +101,8 @@ specific physical setup.
   fine layers.
 - Prime tower, wipe, and purge volumes are not fully tuned for asymmetric
   0.2/0.4 mm swaps.
+- Other nozzle diameter pairs use the same generic mode controls, but only the
+  0.2/0.4 mm pairing has real-print validation so far.
 - Same-name/same-color material slots can make UI summaries look collapsed.
 - No CI packaging has been added.
 

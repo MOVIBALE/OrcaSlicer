@@ -3,11 +3,21 @@
 This branch is an experimental Snapmaker U1 mixed-nozzle workflow for using
 different nozzle diameters in one print.
 
-The first target is:
+The first real-print validated setup is:
 
 - logical T0 / nozzle 1: 0.4 mm, inner walls and infill
 - logical T1 / nozzle 2: 0.2 mm, outer walls
 - logical T2/T3: available but unused by the starter profiles
+
+The implementation is not tied to that one nozzle pair. Configure other pairs
+by setting each U1 nozzle diameter, choosing feature filaments, setting the
+feature line widths, then selecting one of the two mixed nozzle modes:
+
+- `Same layer, different line widths`: outer walls, inner walls, and infill
+  stay on the current process layer height.
+- `Mixed layer, different line widths`: outer walls stay on the current fine
+  layer height, while inner walls and sparse infill are combined by
+  `Mixed nozzle layer height ratio`.
 
 The matching U1 firmware patch is required. Stock firmware validates every used
 physical nozzle against the first slicer nozzle diameter and rejects mixed-nozzle
@@ -24,9 +34,12 @@ toolhead selected by `extruder_map_table`.
 - Added printer filament sync from the connected U1.
 - Mapped synced machine filament slots from physical head order into slicer
   logical T-slot order through `extruder_map_table`.
-- Added experimental mixed-layer planning for internal walls and infill, so fine
-  0.10 mm outer walls can be paired with combined 0.20 mm inner walls/infill.
-- Added two starter process profiles:
+- Added `mixed_nozzle_mode` and `mixed_nozzle_layer_height_ratio` as generic
+  controls for same-layer and mixed-layer mixed-nozzle slicing.
+- Added experimental mixed-layer planning for internal walls and infill, so
+  fine outer walls can be paired with combined coarse-nozzle inner
+  walls/infill without hardcoding a 0.20 mm process value.
+- Added two starter process profiles as examples:
   - `0.12 Mixed Nozzle Outer T0 Inner T1 @Snapmaker U1`
   - `0.10 Mixed Layer Outer Nozzle2 Inner Nozzle1 @Snapmaker U1`
 
@@ -45,11 +58,14 @@ toolhead selected by `extruder_map_table`.
    - Wall: slot 1 / T0 / 0.4 mm
    - Sparse infill: slot 1 / T0 / 0.4 mm
    - Solid infill: slot 1 / T0 / 0.4 mm
-9. Slice a simple cube before testing real parts.
+9. In Strength > Advanced, confirm:
+   - Mixed nozzle mode: `Mixed layer, different line widths`
+   - Mixed nozzle layer height ratio: `2`
+10. Slice a simple cube before testing real parts.
 
 For the older same-layer-height test profile, use
 `0.12 Mixed Nozzle Outer T0 Inner T1 @Snapmaker U1` and confirm the tool mapping
-shown in that profile name.
+shown in that profile name. It should use `Same layer, different line widths`.
 
 ## G-code Verification
 
@@ -57,8 +73,9 @@ The latest local cube validation used:
 
 - model: `20mmbox-LF.stl`
 - slicer process: `0.10 Mixed Layer Outer Nozzle2 Inner Nozzle1 @Snapmaker U1`
+- mixed nozzle mode: `mixed_layer`, ratio `2`
 - nozzle table: T0 `0.4 mm`, T1 `0.2 mm`, T2 `0.4 mm`, T3 `0.4 mm`
-- output: `F:\FC\snaporca_gcode_check\slice_unique_20260617-061636\out\plate_1.gcode`
+- output: `F:\FC\snaporca_gcode_check\modeok3_20260621-132756\out\plate_1.gcode`
 
 Observed G-code characteristics:
 
@@ -73,6 +90,9 @@ Observed G-code characteristics:
 - sparse infill moves: all T0, mostly `HEIGHT=0.2`
 - internal solid infill moves: all T0
 - no object extrusion on T2/T3
+- legacy `inner_wall_combination` and `infill_combination` were both disabled
+  in the profile, confirming the mixed-layer result came from
+  `mixed_nozzle_mode`
 
 The object-role checker found no violations for the expected mapping:
 
@@ -96,7 +116,7 @@ Local checks run on Windows:
 
 - `Snapmaker_Orca` Release target: build passed.
 - `libslic3r_tests.exe [MachineFilamentSync]`: passed, 17 assertions.
-- `libslic3r_tests.exe [MixedLayerHeight]`: passed, 7 assertions.
+- `libslic3r_tests.exe [MixedLayerHeight]`: passed, 11 assertions.
 - `Snapmaker_Orca_profile_validator.exe --vendor Snapmaker`: passed.
 - Real U1 mixed-nozzle test print: passed.
 
@@ -120,6 +140,8 @@ production profile set.
 - Mixed-layer internal walls are V1 logic. It combines internal wall paths onto
   the upper fine layer and removes the lower fine-layer internal wall path. It
   does not yet reclipped/reintersect internal walls against changing geometry.
+- Other nozzle pairs now share the same mode controls, but only the 0.2/0.4 mm
+  pairing has real-print validation so far.
 - Sloped walls, small islands, thin features, holes, and top/bottom transitions
   need real print testing.
 - Identical filament names and colors can make preview/material summaries hard

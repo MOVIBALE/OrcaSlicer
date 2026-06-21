@@ -146,6 +146,17 @@ std::vector<double> print_object_layer_heights(const LayerPtrs &layers)
     return heights;
 }
 
+double mixed_nozzle_reference_layer_height(const std::vector<double> &layer_heights)
+{
+    double reference_height = 0.;
+    for (const double layer_height : layer_heights) {
+        if (layer_height <= 0.)
+            continue;
+        reference_height = reference_height <= 0. ? layer_height : std::min(reference_height, layer_height);
+    }
+    return reference_height;
+}
+
 double mixed_layer_group_height(const LayerPtrs &layers, const size_t target_layer_idx, const size_t num_layers)
 {
     double height = 0.;
@@ -1005,6 +1016,8 @@ bool PrintObject::invalidate_state_by_config_options(
             || opt_key == "inner_wall_line_width"
             || opt_key == "inner_wall_combination"
             || opt_key == "inner_wall_combination_max_layer_height"
+            || opt_key == "mixed_nozzle_mode"
+            || opt_key == "mixed_nozzle_layer_height_ratio"
             || opt_key == "infill_wall_overlap"
             || opt_key == "top_bottom_infill_wall_overlap"
             || opt_key == "seam_gap"
@@ -1179,6 +1192,8 @@ bool PrintObject::invalidate_state_by_config_options(
             || opt_key == "infill_multiline"
             || opt_key == "infill_combination"
             || opt_key == "infill_combination_max_layer_height"
+            || opt_key == "mixed_nozzle_mode"
+            || opt_key == "mixed_nozzle_layer_height_ratio"
             || opt_key == "bottom_shell_thickness"
             || opt_key == "top_shell_thickness"
             || opt_key == "minimum_sparse_infill_area"
@@ -4391,7 +4406,8 @@ void PrintObject::combine_infill()
     for (size_t region_id = 0; region_id < this->num_printing_regions(); ++ region_id) {
         const PrintRegion &region = this->printing_region(region_id);
         //BBS
-        const bool enable_combine_infill = region.config().infill_combination.value;
+        const bool mixed_layer_mode     = region.config().mixed_nozzle_mode.value == MixedNozzleMode::MixedLayer;
+        const bool enable_combine_infill = region.config().infill_combination.value || mixed_layer_mode;
         if (enable_combine_infill == false || region.config().sparse_infill_density == 0.)
             continue;
 
@@ -4401,22 +4417,35 @@ void PrintObject::combine_infill()
         const InfillPattern infill_pattern   = use_solid_infill ? region.config().internal_solid_infill_pattern :
                                                                   region.config().sparse_infill_pattern;
 
-        // Limit the number of combined layers to the maximum height allowed by this regions' nozzle.
-        //FIXME limit the layer height to max_layer_height
-        const int outer_wall_filament = region.config().outer_wall_filament.value > 0 ?
-                                            region.config().outer_wall_filament.value :
-                                            region.config().wall_filament.value;
-        double nozzle_diameter = this->print()->config().nozzle_diameter.get_at(outer_wall_filament - 1);
-        nozzle_diameter = std::min(nozzle_diameter, this->print()->config().nozzle_diameter.get_at(region.config().wall_filament.value - 1));
-        nozzle_diameter = std::min(nozzle_diameter, this->print()->config().nozzle_diameter.get_at(region.config().sparse_infill_filament.value - 1));
-        nozzle_diameter = std::min(nozzle_diameter, this->print()->config().nozzle_diameter.get_at(region.config().solid_infill_filament.value - 1));
-        
-        //Orca: Limit combination of infill to up to infill_combination_max_layer_height
-        const double infill_combination_max_layer_height = region.config().infill_combination_max_layer_height.get_abs_value(nozzle_diameter);
-        nozzle_diameter = infill_combination_max_layer_height > 0 ? std::min(infill_combination_max_layer_height, nozzle_diameter) : nozzle_diameter;
+        const std::vector<double> layer_heights = print_object_layer_heights(m_layers);
+        double max_combined_layer_height = 0.;
+        if (mixed_layer_mode) {
+            const int    filament        = std::max(1, use_solid_infill ? region.config().solid_infill_filament.value :
+                                                                      region.config().sparse_infill_filament.value);
+            const double nozzle_diameter = this->print()->config().nozzle_diameter.get_at(filament - 1);
+            max_combined_layer_height = mixed_nozzle_combined_layer_height(mixed_nozzle_reference_layer_height(layer_heights),
+                                                                           nozzle_diameter,
+                                                                           region.config().mixed_nozzle_layer_height_ratio.value);
+        } else {
+            // Limit the number of combined layers to the maximum height allowed by this regions' nozzle.
+            const int outer_wall_filament = region.config().outer_wall_filament.value > 0 ?
+                                                region.config().outer_wall_filament.value :
+                                                region.config().wall_filament.value;
+            double nozzle_diameter = this->print()->config().nozzle_diameter.get_at(outer_wall_filament - 1);
+            nozzle_diameter = std::min(nozzle_diameter, this->print()->config().nozzle_diameter.get_at(region.config().wall_filament.value - 1));
+            nozzle_diameter = std::min(nozzle_diameter, this->print()->config().nozzle_diameter.get_at(region.config().sparse_infill_filament.value - 1));
+            nozzle_diameter = std::min(nozzle_diameter, this->print()->config().nozzle_diameter.get_at(region.config().solid_infill_filament.value - 1));
+
+            //Orca: Limit combination of infill to up to infill_combination_max_layer_height
+            const double infill_combination_max_layer_height = region.config().infill_combination_max_layer_height.get_abs_value(nozzle_diameter);
+            max_combined_layer_height = infill_combination_max_layer_height > 0 ? std::min(infill_combination_max_layer_height, nozzle_diameter) : nozzle_diameter;
+        }
+
+        if (max_combined_layer_height <= 0.)
+            continue;
         
         // define the combinations
-        std::vector<size_t> combine = build_mixed_layer_height_spans(print_object_layer_heights(m_layers), nozzle_diameter, false);
+        std::vector<size_t> combine = build_mixed_layer_height_spans(layer_heights, max_combined_layer_height, false);
 
         // loop through layers to which we have assigned layers to combine
         for (size_t layer_idx = 0; layer_idx < m_layers.size(); ++ layer_idx) {
@@ -4496,17 +4525,25 @@ void PrintObject::combine_internal_walls()
 
     for (size_t region_id = 0; region_id < this->num_printing_regions(); ++region_id) {
         const PrintRegion &region = this->printing_region(region_id);
-        if (!region.config().inner_wall_combination.value || region.config().wall_loops.value <= 1)
+        const bool mixed_layer_mode = region.config().mixed_nozzle_mode.value == MixedNozzleMode::MixedLayer;
+        if ((!region.config().inner_wall_combination.value && !mixed_layer_mode) || region.config().wall_loops.value <= 1)
             continue;
 
         const int wall_filament = std::max(1, region.config().wall_filament.value);
         double nozzle_diameter = this->print()->config().nozzle_diameter.get_at(wall_filament - 1);
-        const double max_layer_height = region.config().inner_wall_combination_max_layer_height.get_abs_value(nozzle_diameter);
-        nozzle_diameter = max_layer_height > 0. ? std::min(max_layer_height, nozzle_diameter) : nozzle_diameter;
-        if (nozzle_diameter <= 0.)
+        const double inner_wall_combination_max_layer_height =
+            region.config().inner_wall_combination_max_layer_height.get_abs_value(nozzle_diameter);
+        const double max_combined_layer_height = mixed_layer_mode ?
+                                                     mixed_nozzle_combined_layer_height(mixed_nozzle_reference_layer_height(layer_heights),
+                                                                                        nozzle_diameter,
+                                                                                        region.config().mixed_nozzle_layer_height_ratio.value) :
+                                                     (inner_wall_combination_max_layer_height > 0. ?
+                                                          std::min(inner_wall_combination_max_layer_height, nozzle_diameter) :
+                                                          nozzle_diameter);
+        if (max_combined_layer_height <= 0.)
             continue;
 
-        const std::vector<size_t> combine = build_mixed_layer_height_spans(layer_heights, nozzle_diameter, true);
+        const std::vector<size_t> combine = build_mixed_layer_height_spans(layer_heights, max_combined_layer_height, true);
         for (size_t target_layer_idx = 0; target_layer_idx < combine.size(); ++target_layer_idx) {
             const size_t num_layers = combine[target_layer_idx];
             if (num_layers <= 1)

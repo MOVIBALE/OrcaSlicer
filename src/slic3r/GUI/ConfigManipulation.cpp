@@ -551,12 +551,14 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, co
     }
 
     bool have_perimeters = config->opt_int("wall_loops") > 0;
+    const bool mixed_nozzle_mixed_layer = config->opt_enum<MixedNozzleMode>("mixed_nozzle_mode") == MixedNozzleMode::MixedLayer;
     for (auto el : { "extra_perimeters_on_overhangs", "ensure_vertical_shell_thickness", "detect_thin_wall", "detect_overhang_wall",
         "seam_position", "staggered_inner_seams", "wall_sequence", "outer_wall_line_width",
         "inner_wall_speed", "outer_wall_speed", "small_perimeter_speed", "small_perimeter_threshold",
         "inner_wall_combination" })
         toggle_field(el, have_perimeters);
-    toggle_line("inner_wall_combination_max_layer_height", have_perimeters && config->opt_bool("inner_wall_combination"));
+    toggle_line("mixed_nozzle_layer_height_ratio", mixed_nozzle_mixed_layer);
+    toggle_line("inner_wall_combination_max_layer_height", have_perimeters && config->opt_bool("inner_wall_combination") && !mixed_nozzle_mixed_layer);
 
     bool have_infill = config->option<ConfigOptionPercent>("sparse_infill_density")->value > 0;
     // sparse_infill_filament uses the same logic as in Print::extruders()
@@ -564,7 +566,7 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, co
         "minimum_sparse_infill_area", "infill_anchor_max","infill_shift_step","sparse_infill_rotate_template","symmetric_infill_y_axis"})
         toggle_line(el, have_infill);
 
-    bool have_combined_infill = config->opt_bool("infill_combination") && have_infill;
+    bool have_combined_infill = config->opt_bool("infill_combination") && have_infill && !mixed_nozzle_mixed_layer;
     toggle_line("infill_combination_max_layer_height", have_combined_infill);
 
     // Infill patterns that support multiline infill.

@@ -34,3 +34,15 @@ TEST_CASE("mixed layer spans can keep the first layer on the fine height", "[Mix
 
     CHECK(spans == std::vector<size_t>({0, 0, 2, 0}));
 }
+
+TEST_CASE("mixed nozzle ratio target derives coarse layer height from current fine layer", "[MixedLayerHeight]")
+{
+    CHECK(mixed_nozzle_combined_layer_height(0.10, 0.40, 2) == Approx(0.20));
+    CHECK(mixed_nozzle_combined_layer_height(0.12, 0.60, 2) == Approx(0.24));
+}
+
+TEST_CASE("mixed nozzle ratio target is clamped to the selected coarse nozzle", "[MixedLayerHeight]")
+{
+    CHECK(mixed_nozzle_combined_layer_height(0.30, 0.40, 2) == Approx(0.40));
+    CHECK(mixed_nozzle_combined_layer_height(0.10, 0.40, 1) == Approx(0.20));
+}

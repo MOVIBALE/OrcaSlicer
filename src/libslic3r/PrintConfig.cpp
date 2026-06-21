@@ -202,6 +202,12 @@ static t_config_enum_values s_keys_map_WallSequence {
 };
 CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(WallSequence)
 
+static t_config_enum_values s_keys_map_MixedNozzleMode {
+    { "same_layer",  int(MixedNozzleMode::SameLayer) },
+    { "mixed_layer", int(MixedNozzleMode::MixedLayer) }
+};
+CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(MixedNozzleMode)
+
 //Orca
 static t_config_enum_values s_keys_map_WallDirection{
     { "auto", int(WallDirection::Auto) },
@@ -3283,6 +3289,30 @@ void PrintConfigDef::init_fff_params()
                      "Outer walls are still printed at the original fine layer height.");
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionBool(false));
+
+    def = this->add("mixed_nozzle_mode", coEnum);
+    def->label = L("Mixed nozzle mode");
+    def->category = L("Strength");
+    def->tooltip = L("Select how mixed nozzle slicing handles feature heights.\n\n"
+                     "Same layer keeps all features on the current layer height while allowing outer walls, inner walls, and infill to use different tool/line-width settings.\n\n"
+                     "Mixed layer keeps outer walls on the current fine layer height and combines inner walls and sparse infill over several fine layers for the coarse nozzle.");
+    def->enum_keys_map = &ConfigOptionEnum<MixedNozzleMode>::get_enum_values();
+    def->enum_values.push_back("same_layer");
+    def->enum_values.push_back("mixed_layer");
+    def->enum_labels.push_back(L("Same layer, different line widths"));
+    def->enum_labels.push_back(L("Mixed layer, different line widths"));
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionEnum<MixedNozzleMode>(MixedNozzleMode::SameLayer));
+
+    def = this->add("mixed_nozzle_layer_height_ratio", coInt);
+    def->label = L("Mixed nozzle layer height ratio");
+    def->category = L("Strength");
+    def->tooltip = L("Fine-layer count to combine for inner walls and sparse infill when Mixed nozzle mode is set to Mixed layer. "
+                     "For example, 2 turns two 0.10 mm outer-wall layers into one 0.20 mm inner-wall/infill layer, clamped by the selected coarse nozzle diameter.");
+    def->min = 2;
+    def->max = 4;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionInt(2));
 
     def           = this->add("infill_shift_step", coFloat);
     def->label    = L("Infill shift step");

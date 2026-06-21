@@ -1,6 +1,19 @@
 #include "MixedLayerHeight.hpp"
 
+#include <algorithm>
+
 namespace Slic3r {
+
+double mixed_nozzle_combined_layer_height(const double fine_layer_height,
+                                          const double coarse_nozzle_diameter,
+                                          const int    layer_ratio)
+{
+    if (fine_layer_height <= 0. || coarse_nozzle_diameter <= 0.)
+        return 0.;
+
+    const int ratio = std::max(2, layer_ratio);
+    return std::min(fine_layer_height * double(ratio), coarse_nozzle_diameter);
+}
 
 std::vector<size_t> build_mixed_layer_height_spans(const std::vector<double>& layer_heights,
                                                    const double               max_combined_height,

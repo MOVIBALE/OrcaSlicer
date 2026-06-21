@@ -5,12 +5,16 @@
 This release is an experimental Snapmaker U1 software build for mixed-nozzle
 printing, paired with a patched U1 extended firmware build.
 
-Primary scenario:
+Real-print validated scenario:
 
 - 0.2 mm nozzle for visible outer walls
 - 0.4 mm nozzle for inner walls and infill
-- optional mixed layer height: 0.10 mm outer walls and 0.20 mm combined inner
-  walls/infill
+
+The slicer now exposes two generic mixed-nozzle modes instead of relying on
+fixed per-nozzle-pair process presets:
+
+- Same layer, different line widths
+- Mixed layer, different line widths
 
 ## Software Changes
 
@@ -22,13 +26,15 @@ Primary scenario:
   infill combination.
 - Added `inner_wall_combination` and
   `inner_wall_combination_max_layer_height`.
+- Added `mixed_nozzle_mode` and `mixed_nozzle_layer_height_ratio` so mixed-layer
+  height is derived from the active fine layer height and selected ratio.
 - Kept U1 nozzle diameters independently editable per nozzle tab.
 - Added nozzle diameter labels to U1 nozzle tabs.
 - Updated printer filament sync to read filament and nozzle information from
   the connected U1.
 - Mapped machine filament data from physical head order into logical T-slot
   order with `extruder_map_table`.
-- Added starter Snapmaker U1 mixed-nozzle process presets.
+- Added starter Snapmaker U1 mixed-nozzle process presets as mode examples.
 - Added focused unit tests for machine filament slot mapping and mixed-layer
   span planning.
 
@@ -51,7 +57,7 @@ Local validation completed on Windows:
 
 - Snapmaker Orca Release build: passed.
 - Focused `MachineFilamentSync` unit test: passed.
-- Focused `MixedLayerHeight` unit tests: passed.
+- Focused `MixedLayerHeight` unit tests: passed, 11 assertions.
 - Snapmaker profile validator: passed.
 - Cube G-code role inspection: passed.
 - Real Snapmaker U1 mixed-nozzle print on 2026-06-18: passed.
@@ -63,6 +69,9 @@ G-code inspection results for the 0.10 mixed-layer cube:
 - sparse infill: T0, 0.4 mm nozzle, mostly 0.20 mm combined layers
 - internal solid infill: T0
 - no object extrusion on T2/T3
+- the checked profile had `inner_wall_combination = 0` and
+  `infill_combination = 0`, so mixed-layer behavior was driven by
+  `mixed_nozzle_mode = mixed_layer`
 
 Real print validation:
 
@@ -73,9 +82,10 @@ Real print validation:
 - Target printer: Snapmaker U1.
 - Target firmware base: SnapmakerU1-Extended-Firmware 1.4.1 based build.
 - Target slicer base: Snapmaker Orca branch based on Snapmaker Orca 2.3.4.
-- Tested nozzle pairing: 0.4 mm logical T0 and 0.2 mm logical T1.
+- Real-print tested nozzle pairing: 0.4 mm logical T0 and 0.2 mm logical T1.
 
-Other nozzle pairings may work but have not been validated.
+Other nozzle pairings should use the same mode controls, but they have not been
+real-print validated yet.
 
 ## Limitations
 
@@ -84,6 +94,8 @@ Other nozzle pairings may work but have not been validated.
   prints.
 - Mixed-layer internal walls are not geometry-aware across different Z slices
   yet. Complex sloped or thin geometry can still need slicer logic changes.
+- Same-layer mode still depends on the selected feature filaments and line
+  widths being physically sensible for the installed nozzles.
 - Preview and material summaries can be confusing when multiple slots use the
   same filament name/color.
 - The firmware patch only changes validation. It does not make every mechanical

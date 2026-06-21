@@ -9,19 +9,26 @@
 This fork branch contains an experimental Snapmaker U1 mixed-nozzle workflow.
 It is not an official Snapmaker release.
 
-The first validated target is:
+The first validated hardware setup is:
 
 - 0.2 mm nozzle for visible outer walls.
 - 0.4 mm nozzle for inner walls and infill.
-- Optional mixed layer strategy: 0.10 mm outer walls with 0.20 mm combined inner walls/infill.
+
+The slicer side is now modelled as two selectable modes, so other nozzle
+diameter pairs should be configured by changing nozzle diameters, feature
+filaments, and line widths instead of adding fixed process presets:
+
+- Same layer, different line widths.
+- Mixed layer, different line widths.
 
 Main changes in this branch:
 
 - U1 nozzle diameters can be edited independently per toolhead.
 - Nozzle tabs show the selected diameter.
 - `outer_wall_filament` routes external perimeters to a different tool than inner walls.
+- `mixed_nozzle_mode` selects same-layer or mixed-layer slicing.
 - Printer filament sync reads U1 head-slot material/nozzle information and maps physical heads to logical T-slots through `extruder_map_table`.
-- Two starter U1 process profiles are included for same-layer and mixed-layer testing.
+- Two starter U1 process profiles are included as mode examples.
 - A matching U1 firmware validation patch is required for mixed-nozzle G-code.
 
 Real Snapmaker U1 mixed-nozzle print validation passed on 2026-06-18:

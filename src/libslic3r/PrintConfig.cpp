@@ -3304,13 +3304,21 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionEnum<MixedNozzleMode>(MixedNozzleMode::SameLayer));
 
-    def = this->add("mixed_nozzle_layer_height_ratio", coInt);
-    def->label = L("Mixed nozzle layer height ratio");
+    def = this->add("mixed_nozzle_auto_layer_height_ratio", coBool);
+    def->label = L("Auto mixed nozzle layer ratio");
     def->category = L("Strength");
-    def->tooltip = L("Fine-layer count to combine for inner walls and sparse infill when Mixed nozzle mode is set to Mixed layer. "
-                     "For example, 2 turns two 0.10 mm outer-wall layers into one 0.20 mm inner-wall/infill layer, clamped by the selected coarse nozzle diameter.");
+    def->tooltip = L("Automatically derive the fine-layer count for mixed-layer printing from the selected outer-wall nozzle diameter and the coarse feature nozzle diameter. "
+                     "For example, 0.2 mm outer walls with 0.8 mm inner walls or infill use a 4-layer ratio. Disable this to use the manual ratio below.");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionBool(true));
+
+    def = this->add("mixed_nozzle_layer_height_ratio", coInt);
+    def->label = L("Manual mixed nozzle layer height ratio");
+    def->category = L("Strength");
+    def->tooltip = L("Manual fine-layer count to combine for inner walls and sparse infill when Mixed nozzle mode is set to Mixed layer and automatic ratio is disabled. "
+                     "For example, 2 turns two 0.10 mm outer-wall layers into one 0.20 mm inner-wall/infill layer. The result is still clamped by the selected coarse nozzle diameter.");
     def->min = 2;
-    def->max = 4;
+    def->max = 8;
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionInt(2));
 

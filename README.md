@@ -27,6 +27,8 @@ Main changes in this branch:
 - Nozzle tabs show the selected diameter.
 - `outer_wall_filament` routes external perimeters to a different tool than inner walls.
 - `mixed_nozzle_mode` selects same-layer or mixed-layer slicing.
+- Mixed-layer mode defaults to an automatic layer ratio based on the selected
+  outer-wall nozzle and coarse feature nozzle, with a manual override available.
 - Printer filament sync reads U1 head-slot material/nozzle information and maps physical heads to logical T-slots through `extruder_map_table`.
 - Two starter U1 process profiles are included as mode examples.
 - A matching U1 firmware validation patch is required for mixed-nozzle G-code.

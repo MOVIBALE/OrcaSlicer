@@ -46,3 +46,17 @@ TEST_CASE("mixed nozzle ratio target is clamped to the selected coarse nozzle", 
     CHECK(mixed_nozzle_combined_layer_height(0.30, 0.40, 2) == Approx(0.40));
     CHECK(mixed_nozzle_combined_layer_height(0.10, 0.40, 1) == Approx(0.20));
 }
+
+TEST_CASE("mixed nozzle auto ratio follows nozzle diameter pairing", "[MixedLayerHeight]")
+{
+    CHECK(mixed_nozzle_auto_layer_height_ratio(0.20, 0.80) == 4);
+    CHECK(mixed_nozzle_auto_layer_height_ratio(0.20, 0.40) == 2);
+    CHECK(mixed_nozzle_auto_layer_height_ratio(0.40, 0.80) == 2);
+    CHECK(mixed_nozzle_auto_layer_height_ratio(0.40, 0.60) == 2);
+}
+
+TEST_CASE("mixed nozzle effective ratio keeps manual override", "[MixedLayerHeight]")
+{
+    CHECK(mixed_nozzle_effective_layer_height_ratio(false, 3, 0.20, 0.80) == 3);
+    CHECK(mixed_nozzle_effective_layer_height_ratio(true, 2, 0.20, 0.80) == 4);
+}

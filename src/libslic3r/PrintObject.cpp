@@ -166,6 +166,19 @@ double mixed_layer_group_height(const LayerPtrs &layers, const size_t target_lay
     return height;
 }
 
+int mixed_nozzle_outer_wall_filament(const PrintRegion &region)
+{
+    const int wall_filament = std::max(1, region.config().wall_filament.value);
+    return std::max(1, region.config().outer_wall_filament.value > 0 ?
+                           region.config().outer_wall_filament.value :
+                           wall_filament);
+}
+
+double mixed_nozzle_diameter_for_filament(const PrintConfig &config, const int filament)
+{
+    return config.nozzle_diameter.get_at(std::max(1, filament) - 1);
+}
+
 } // namespace
 
 // Constructor is called from the main thread, therefore all Model / ModelObject / ModelIntance data are valid.
@@ -1017,6 +1030,7 @@ bool PrintObject::invalidate_state_by_config_options(
             || opt_key == "inner_wall_combination"
             || opt_key == "inner_wall_combination_max_layer_height"
             || opt_key == "mixed_nozzle_mode"
+            || opt_key == "mixed_nozzle_auto_layer_height_ratio"
             || opt_key == "mixed_nozzle_layer_height_ratio"
             || opt_key == "infill_wall_overlap"
             || opt_key == "top_bottom_infill_wall_overlap"
@@ -1193,6 +1207,7 @@ bool PrintObject::invalidate_state_by_config_options(
             || opt_key == "infill_combination"
             || opt_key == "infill_combination_max_layer_height"
             || opt_key == "mixed_nozzle_mode"
+            || opt_key == "mixed_nozzle_auto_layer_height_ratio"
             || opt_key == "mixed_nozzle_layer_height_ratio"
             || opt_key == "bottom_shell_thickness"
             || opt_key == "top_shell_thickness"
@@ -4408,110 +4423,130 @@ void PrintObject::combine_infill()
         //BBS
         const bool mixed_layer_mode     = region.config().mixed_nozzle_mode.value == MixedNozzleMode::MixedLayer;
         const bool enable_combine_infill = region.config().infill_combination.value || mixed_layer_mode;
-        if (enable_combine_infill == false || region.config().sparse_infill_density == 0.)
+        if (enable_combine_infill == false)
             continue;
 
-        // Support internal solid infill when sparse_infill_density is 100%
-        const bool          use_solid_infill = fabs(region.config().sparse_infill_density.value - 100.) < EPSILON;
-        const SurfaceType   surface_type     = use_solid_infill ? stInternalSolid : stInternal;
-        const InfillPattern infill_pattern   = use_solid_infill ? region.config().internal_solid_infill_pattern :
-                                                                  region.config().sparse_infill_pattern;
-
         const std::vector<double> layer_heights = print_object_layer_heights(m_layers);
-        double max_combined_layer_height = 0.;
-        if (mixed_layer_mode) {
-            const int    filament        = std::max(1, use_solid_infill ? region.config().solid_infill_filament.value :
-                                                                      region.config().sparse_infill_filament.value);
-            const double nozzle_diameter = this->print()->config().nozzle_diameter.get_at(filament - 1);
-            max_combined_layer_height = mixed_nozzle_combined_layer_height(mixed_nozzle_reference_layer_height(layer_heights),
-                                                                           nozzle_diameter,
-                                                                           region.config().mixed_nozzle_layer_height_ratio.value);
-        } else {
+        const PrintConfig &print_config = this->print()->config();
+        const auto mixed_max_combined_layer_height = [&](const int filament) {
+            const int    coarse_filament   = std::max(1, filament);
+            const double fine_nozzle       = mixed_nozzle_diameter_for_filament(print_config, mixed_nozzle_outer_wall_filament(region));
+            const double coarse_nozzle     = mixed_nozzle_diameter_for_filament(print_config, coarse_filament);
+            const int    layer_ratio       = mixed_nozzle_effective_layer_height_ratio(region.config().mixed_nozzle_auto_layer_height_ratio.value,
+                                                                                      region.config().mixed_nozzle_layer_height_ratio.value,
+                                                                                      fine_nozzle,
+                                                                                      coarse_nozzle);
+            return mixed_nozzle_combined_layer_height(mixed_nozzle_reference_layer_height(layer_heights),
+                                                      coarse_nozzle,
+                                                      layer_ratio);
+        };
+
+        const auto legacy_max_combined_layer_height = [&]() {
             // Limit the number of combined layers to the maximum height allowed by this regions' nozzle.
             const int outer_wall_filament = region.config().outer_wall_filament.value > 0 ?
                                                 region.config().outer_wall_filament.value :
                                                 region.config().wall_filament.value;
-            double nozzle_diameter = this->print()->config().nozzle_diameter.get_at(outer_wall_filament - 1);
-            nozzle_diameter = std::min(nozzle_diameter, this->print()->config().nozzle_diameter.get_at(region.config().wall_filament.value - 1));
-            nozzle_diameter = std::min(nozzle_diameter, this->print()->config().nozzle_diameter.get_at(region.config().sparse_infill_filament.value - 1));
-            nozzle_diameter = std::min(nozzle_diameter, this->print()->config().nozzle_diameter.get_at(region.config().solid_infill_filament.value - 1));
+            double nozzle_diameter = mixed_nozzle_diameter_for_filament(print_config, outer_wall_filament);
+            nozzle_diameter = std::min(nozzle_diameter, mixed_nozzle_diameter_for_filament(print_config, region.config().wall_filament.value));
+            nozzle_diameter = std::min(nozzle_diameter, mixed_nozzle_diameter_for_filament(print_config, region.config().sparse_infill_filament.value));
+            nozzle_diameter = std::min(nozzle_diameter, mixed_nozzle_diameter_for_filament(print_config, region.config().solid_infill_filament.value));
 
             //Orca: Limit combination of infill to up to infill_combination_max_layer_height
             const double infill_combination_max_layer_height = region.config().infill_combination_max_layer_height.get_abs_value(nozzle_diameter);
-            max_combined_layer_height = infill_combination_max_layer_height > 0 ? std::min(infill_combination_max_layer_height, nozzle_diameter) : nozzle_diameter;
-        }
+            return infill_combination_max_layer_height > 0 ? std::min(infill_combination_max_layer_height, nozzle_diameter) : nozzle_diameter;
+        };
 
-        if (max_combined_layer_height <= 0.)
-            continue;
-        
-        // define the combinations
-        std::vector<size_t> combine = build_mixed_layer_height_spans(layer_heights, max_combined_layer_height, false);
+        const auto combine_surface_type = [&](const SurfaceType surface_type, const InfillPattern infill_pattern, const double max_combined_layer_height) {
+            if (max_combined_layer_height <= 0.)
+                return;
 
-        // loop through layers to which we have assigned layers to combine
-        for (size_t layer_idx = 0; layer_idx < m_layers.size(); ++ layer_idx) {
-            m_print->throw_if_canceled();
-            size_t num_layers = combine[layer_idx];
-			if (num_layers <= 1)
-                continue;
-            // Get all the LayerRegion objects to be combined.
-            std::vector<LayerRegion*> layerms;
-            layerms.reserve(num_layers);
-			for (size_t i = layer_idx + 1 - num_layers; i <= layer_idx; ++ i)
-                layerms.emplace_back(m_layers[i]->regions()[region_id]);
-            // We need to perform a multi-layer intersection, so let's split it in pairs.
-            // Initialize the intersection with the candidates of the lowest layer.
-            ExPolygons intersection = to_expolygons(layerms.front()->fill_surfaces.filter_by_type(surface_type));
-            // Start looping from the second layer and intersect the current intersection with it.
-            for (size_t i = 1; i < layerms.size(); ++ i)
-                intersection = intersection_ex(layerms[i]->fill_surfaces.filter_by_type(surface_type), intersection);
-            double area_threshold = layerms.front()->infill_area_threshold();
-            if (! intersection.empty() && area_threshold > 0.)
-                intersection.erase(std::remove_if(intersection.begin(), intersection.end(),
-                    [area_threshold](const ExPolygon &expoly) { return expoly.area() <= area_threshold; }),
-                    intersection.end());
-            if (intersection.empty())
-                continue;
+            // define the combinations
+            std::vector<size_t> combine = build_mixed_layer_height_spans(layer_heights, max_combined_layer_height, false);
+
+            // loop through layers to which we have assigned layers to combine
+            for (size_t layer_idx = 0; layer_idx < m_layers.size(); ++ layer_idx) {
+                m_print->throw_if_canceled();
+                size_t num_layers = combine[layer_idx];
+                if (num_layers <= 1)
+                    continue;
+                // Get all the LayerRegion objects to be combined.
+                std::vector<LayerRegion*> layerms;
+                layerms.reserve(num_layers);
+                for (size_t i = layer_idx + 1 - num_layers; i <= layer_idx; ++ i)
+                    layerms.emplace_back(m_layers[i]->regions()[region_id]);
+                // We need to perform a multi-layer intersection, so let's split it in pairs.
+                // Initialize the intersection with the candidates of the lowest layer.
+                ExPolygons intersection = to_expolygons(layerms.front()->fill_surfaces.filter_by_type(surface_type));
+                // Start looping from the second layer and intersect the current intersection with it.
+                for (size_t i = 1; i < layerms.size(); ++ i)
+                    intersection = intersection_ex(layerms[i]->fill_surfaces.filter_by_type(surface_type), intersection);
+                double area_threshold = layerms.front()->infill_area_threshold();
+                if (! intersection.empty() && area_threshold > 0.)
+                    intersection.erase(std::remove_if(intersection.begin(), intersection.end(),
+                        [area_threshold](const ExPolygon &expoly) { return expoly.area() <= area_threshold; }),
+                        intersection.end());
+                if (intersection.empty())
+                    continue;
 //            Slic3r::debugf "  combining %d %s regions from layers %d-%d\n",
 //                scalar(@$intersection),
 //                ($type == stInternal ? 'internal' : 'internal-solid'),
 //                $layer_idx-($every-1), $layer_idx;
-            // intersection now contains the regions that can be combined across the full amount of layers,
-            // so let's remove those areas from all layers.
-            Polygons intersection_with_clearance;
-            intersection_with_clearance.reserve(intersection.size());
-            float clearance_offset =
-                0.5f * layerms.back()->flow(frPerimeter).scaled_width() +
-             // Because fill areas for rectilinear and honeycomb are grown
-             // later to overlap perimeters, we need to counteract that too.
-                ((infill_pattern == ipRectilinear   ||
-                  infill_pattern == ipMonotonic     ||
-                  infill_pattern == ipGrid          ||
-                  infill_pattern == ipLateralLattice     ||
-                  infill_pattern == ipLine          ||
-                  infill_pattern == ipHoneycomb     ||
-                  infill_pattern == ipLateralHoneycomb) ? 1.5f : 0.5f) *
-                    layerms.back()->flow(frSolidInfill).scaled_width();
-            for (ExPolygon &expoly : intersection)
-                polygons_append(intersection_with_clearance, offset(expoly, clearance_offset));
-            for (LayerRegion *layerm : layerms) {
-                Polygons internal = to_polygons(std::move(layerm->fill_surfaces.filter_by_type(surface_type)));
-                layerm->fill_surfaces.remove_type(surface_type);
-                layerm->fill_surfaces.append(diff_ex(internal, intersection_with_clearance), surface_type);
-                if (layerm == layerms.back()) {
-                    // Apply surfaces back with adjusted depth to the uppermost layer.
-                    Surface templ(surface_type, ExPolygon());
-                    templ.thickness = 0.;
-                    for (LayerRegion *layerm2 : layerms)
-                        templ.thickness += layerm2->layer()->height;
-                    templ.thickness_layers = (unsigned short)layerms.size();
-                    layerm->fill_surfaces.append(intersection, templ);
-                } else {
-                    // Save void surfaces.
-                    layerm->fill_surfaces.append(
-                        intersection_ex(internal, intersection_with_clearance),
-                        stInternalVoid);
+                // intersection now contains the regions that can be combined across the full amount of layers,
+                // so let's remove those areas from all layers.
+                Polygons intersection_with_clearance;
+                intersection_with_clearance.reserve(intersection.size());
+                float clearance_offset =
+                    0.5f * layerms.back()->flow(frPerimeter).scaled_width() +
+                 // Because fill areas for rectilinear and honeycomb are grown
+                 // later to overlap perimeters, we need to counteract that too.
+                    ((infill_pattern == ipRectilinear   ||
+                      infill_pattern == ipMonotonic     ||
+                      infill_pattern == ipGrid          ||
+                      infill_pattern == ipLateralLattice     ||
+                      infill_pattern == ipLine          ||
+                      infill_pattern == ipHoneycomb     ||
+                      infill_pattern == ipLateralHoneycomb) ? 1.5f : 0.5f) *
+                        layerms.back()->flow(frSolidInfill).scaled_width();
+                for (ExPolygon &expoly : intersection)
+                    polygons_append(intersection_with_clearance, offset(expoly, clearance_offset));
+                for (LayerRegion *layerm : layerms) {
+                    Polygons internal = to_polygons(std::move(layerm->fill_surfaces.filter_by_type(surface_type)));
+                    layerm->fill_surfaces.remove_type(surface_type);
+                    layerm->fill_surfaces.append(diff_ex(internal, intersection_with_clearance), surface_type);
+                    if (layerm == layerms.back()) {
+                        // Apply surfaces back with adjusted depth to the uppermost layer.
+                        Surface templ(surface_type, ExPolygon());
+                        templ.thickness = 0.;
+                        for (LayerRegion *layerm2 : layerms)
+                            templ.thickness += layerm2->layer()->height;
+                        templ.thickness_layers = (unsigned short)layerms.size();
+                        layerm->fill_surfaces.append(intersection, templ);
+                    } else {
+                        // Save void surfaces.
+                        layerm->fill_surfaces.append(
+                            intersection_ex(internal, intersection_with_clearance),
+                            stInternalVoid);
+                    }
                 }
             }
+        };
+
+        if (mixed_layer_mode) {
+            if (region.config().sparse_infill_density > 0. && fabs(region.config().sparse_infill_density.value - 100.) >= EPSILON)
+                combine_surface_type(stInternal, region.config().sparse_infill_pattern,
+                                     mixed_max_combined_layer_height(region.config().sparse_infill_filament.value));
+            combine_surface_type(stInternalSolid, region.config().internal_solid_infill_pattern,
+                                 mixed_max_combined_layer_height(region.config().solid_infill_filament.value));
+        } else {
+            if (region.config().sparse_infill_density == 0.)
+                continue;
+
+            // Support internal solid infill when sparse_infill_density is 100%
+            const bool          use_solid_infill = fabs(region.config().sparse_infill_density.value - 100.) < EPSILON;
+            const SurfaceType   surface_type     = use_solid_infill ? stInternalSolid : stInternal;
+            const InfillPattern infill_pattern   = use_solid_infill ? region.config().internal_solid_infill_pattern :
+                                                                      region.config().sparse_infill_pattern;
+            combine_surface_type(surface_type, infill_pattern, legacy_max_combined_layer_height());
         }
     }
 }
@@ -4529,14 +4564,19 @@ void PrintObject::combine_internal_walls()
         if ((!region.config().inner_wall_combination.value && !mixed_layer_mode) || region.config().wall_loops.value <= 1)
             continue;
 
+        const PrintConfig &print_config = this->print()->config();
         const int wall_filament = std::max(1, region.config().wall_filament.value);
-        double nozzle_diameter = this->print()->config().nozzle_diameter.get_at(wall_filament - 1);
+        double nozzle_diameter = mixed_nozzle_diameter_for_filament(print_config, wall_filament);
         const double inner_wall_combination_max_layer_height =
             region.config().inner_wall_combination_max_layer_height.get_abs_value(nozzle_diameter);
+        const int layer_ratio = mixed_nozzle_effective_layer_height_ratio(region.config().mixed_nozzle_auto_layer_height_ratio.value,
+                                                                          region.config().mixed_nozzle_layer_height_ratio.value,
+                                                                          mixed_nozzle_diameter_for_filament(print_config, mixed_nozzle_outer_wall_filament(region)),
+                                                                          nozzle_diameter);
         const double max_combined_layer_height = mixed_layer_mode ?
                                                      mixed_nozzle_combined_layer_height(mixed_nozzle_reference_layer_height(layer_heights),
                                                                                         nozzle_diameter,
-                                                                                        region.config().mixed_nozzle_layer_height_ratio.value) :
+                                                                                        layer_ratio) :
                                                      (inner_wall_combination_max_layer_height > 0. ?
                                                           std::min(inner_wall_combination_max_layer_height, nozzle_diameter) :
                                                           nozzle_diameter);

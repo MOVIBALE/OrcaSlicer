@@ -1034,6 +1034,7 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionBool, inner_wall_combination))
     ((ConfigOptionFloatOrPercent,                inner_wall_combination_max_layer_height))
     ((ConfigOptionEnum<MixedNozzleMode>, mixed_nozzle_mode))
+    ((ConfigOptionBool, mixed_nozzle_auto_layer_height_ratio))
     ((ConfigOptionInt, mixed_nozzle_layer_height_ratio))
     ((ConfigOptionInt,                  fill_multiline))
     // Ironing options

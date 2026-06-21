@@ -553,13 +553,18 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, co
     bool have_perimeters = config->opt_int("wall_loops") > 0;
     const auto *mixed_nozzle_mode = config->option<ConfigOptionEnum<MixedNozzleMode>>("mixed_nozzle_mode");
     const bool mixed_nozzle_mixed_layer = mixed_nozzle_mode != nullptr && mixed_nozzle_mode->value == MixedNozzleMode::MixedLayer;
+    const auto *mixed_nozzle_auto_ratio = config->option<ConfigOptionBool>("mixed_nozzle_auto_layer_height_ratio");
+    const bool mixed_nozzle_auto_layer_height_ratio = mixed_nozzle_auto_ratio == nullptr || mixed_nozzle_auto_ratio->value;
     for (auto el : { "extra_perimeters_on_overhangs", "ensure_vertical_shell_thickness", "detect_thin_wall", "detect_overhang_wall",
         "seam_position", "staggered_inner_seams", "wall_sequence", "outer_wall_line_width",
         "inner_wall_speed", "outer_wall_speed", "small_perimeter_speed", "small_perimeter_threshold",
         "inner_wall_combination" })
         toggle_field(el, have_perimeters);
-    if (mixed_nozzle_mode != nullptr)
-        toggle_line("mixed_nozzle_layer_height_ratio", mixed_nozzle_mixed_layer);
+    if (mixed_nozzle_mode != nullptr) {
+        if (mixed_nozzle_auto_ratio != nullptr)
+            toggle_line("mixed_nozzle_auto_layer_height_ratio", mixed_nozzle_mixed_layer);
+        toggle_line("mixed_nozzle_layer_height_ratio", mixed_nozzle_mixed_layer && !mixed_nozzle_auto_layer_height_ratio);
+    }
     toggle_line("inner_wall_combination_max_layer_height", have_perimeters && config->opt_bool("inner_wall_combination") && !mixed_nozzle_mixed_layer);
 
     bool have_infill = config->option<ConfigOptionPercent>("sparse_infill_density")->value > 0;

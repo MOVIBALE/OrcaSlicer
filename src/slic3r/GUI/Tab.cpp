@@ -2451,6 +2451,7 @@ void TabPrint::build()
         optgroup->append_single_option_line("internal_bridge_angle", "strength_settings_advanced#bridge-infill-direction"); // ORCA: Internal bridge angle override
         optgroup->append_single_option_line("minimum_sparse_infill_area", "strength_settings_advanced#minimum-sparse-infill-threshold");
         optgroup->append_single_option_line("mixed_nozzle_mode");
+        optgroup->append_single_option_line("mixed_nozzle_auto_layer_height_ratio");
         optgroup->append_single_option_line("mixed_nozzle_layer_height_ratio");
         optgroup->append_single_option_line("inner_wall_combination", "strength_settings_advanced#infill-combination");
         optgroup->append_single_option_line("inner_wall_combination_max_layer_height", "strength_settings_advanced#max-layer-height");

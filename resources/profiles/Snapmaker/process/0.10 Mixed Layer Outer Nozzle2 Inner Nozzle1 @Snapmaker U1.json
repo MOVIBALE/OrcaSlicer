@@ -23,6 +23,7 @@
     "sparse_infill_filament": "1",
     "solid_infill_filament": "1",
     "mixed_nozzle_mode": "mixed_layer",
+    "mixed_nozzle_auto_layer_height_ratio": "1",
     "mixed_nozzle_layer_height_ratio": "2",
     "inner_wall_combination": "0",
     "infill_combination": "0",

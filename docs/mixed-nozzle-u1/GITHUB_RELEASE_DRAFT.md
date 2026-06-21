@@ -32,8 +32,10 @@ This release requires both:
 - `mixed_nozzle_mode` selector:
   - Same layer, different line widths
   - Mixed layer, different line widths
-- `mixed_nozzle_layer_height_ratio` derives combined coarse-feature height from
-  the active fine layer height.
+- Automatic mixed-layer ratio derives combined coarse-feature height from the
+  selected outer-wall nozzle and coarse feature nozzle.
+- Manual mixed-layer ratio override is available when automatic ratio is
+  disabled.
 - Machine filament sync from the connected U1.
 - Correct physical-head to logical T-slot filament mapping through
   `extruder_map_table`.
@@ -58,16 +60,23 @@ Current local firmware artifact:
 
 - Snapmaker Orca Release build passed.
 - `libslic3r_tests.exe [MachineFilamentSync]` passed, 17 assertions.
-- `libslic3r_tests.exe [MixedLayerHeight]` passed, 11 assertions.
+- `libslic3r_tests.exe [MixedLayerHeight]` passed, 17 assertions.
 - Snapmaker profile validator passed for the Snapmaker profile bundle.
 - 20 mm cube G-code inspection passed:
   - outer wall on T1 / 0.2 mm / 0.10 mm
   - inner wall on T0 / 0.4 mm / 0.20 mm
   - sparse infill on T0 / 0.4 mm / mostly 0.20 mm
-  - internal solid infill on T0
+  - internal solid infill on T0 / 0.10 mm or 0.20 mm depending on overlap
   - no object extrusion on T2/T3
   - `mixed_nozzle_mode = mixed_layer` drove the result with legacy
     `inner_wall_combination` and `infill_combination` both disabled
+- 20 mm cube G-code inspection with T0 `0.8 mm` and T1 `0.2 mm` also passed:
+  - outer wall on T1 / 0.2 mm / 0.10 mm
+  - inner wall on T0 / 0.8 mm / 0.40 mm
+  - sparse infill on T0 / 0.8 mm / mostly 0.40 mm
+  - internal solid infill on T0, remaining 0.10 mm on this cube where no
+    four-layer-overlapped internal solid area was available
+  - role/tool checker violations: 0
 - Real Snapmaker U1 mixed-nozzle print on 2026-06-18 passed.
 
 ## Real Print Photo
@@ -99,10 +108,13 @@ specific physical setup.
 
 - Mixed-layer internal walls are not reclipped against geometry changes between
   fine layers.
+- Mixed-layer internal solid infill only combines fully overlapping
+  internal-solid areas; top/bottom surfaces stay at the process layer height.
 - Prime tower, wipe, and purge volumes are not fully tuned for asymmetric
   0.2/0.4 mm swaps.
-- Other nozzle diameter pairs use the same generic mode controls, but only the
-  0.2/0.4 mm pairing has real-print validation so far.
+- Other nozzle diameter pairs use the same generic mode controls. The 0.2/0.8
+  mm pairing has G-code validation, but only the 0.2/0.4 mm pairing has
+  real-print validation so far.
 - Same-name/same-color material slots can make UI summaries look collapsed.
 - No CI packaging has been added.
 

@@ -26,8 +26,10 @@ fixed per-nozzle-pair process presets:
   infill combination.
 - Added `inner_wall_combination` and
   `inner_wall_combination_max_layer_height`.
-- Added `mixed_nozzle_mode` and `mixed_nozzle_layer_height_ratio` so mixed-layer
-  height is derived from the active fine layer height and selected ratio.
+- Added `mixed_nozzle_mode`, `mixed_nozzle_auto_layer_height_ratio`, and
+  `mixed_nozzle_layer_height_ratio` so mixed-layer height is derived from the
+  active fine layer height and the selected nozzle diameters by default, with a
+  manual ratio override available.
 - Kept U1 nozzle diameters independently editable per nozzle tab.
 - Added nozzle diameter labels to U1 nozzle tabs.
 - Updated printer filament sync to read filament and nozzle information from
@@ -57,7 +59,7 @@ Local validation completed on Windows:
 
 - Snapmaker Orca Release build: passed.
 - Focused `MachineFilamentSync` unit test: passed.
-- Focused `MixedLayerHeight` unit tests: passed, 11 assertions.
+- Focused `MixedLayerHeight` unit tests: passed, 17 assertions.
 - Snapmaker profile validator: passed.
 - Cube G-code role inspection: passed.
 - Real Snapmaker U1 mixed-nozzle print on 2026-06-18: passed.
@@ -67,11 +69,20 @@ G-code inspection results for the 0.10 mixed-layer cube:
 - outer wall: T1, 0.2 mm nozzle, 0.10 mm layers
 - inner wall: T0, 0.4 mm nozzle, 0.20 mm combined layers
 - sparse infill: T0, 0.4 mm nozzle, mostly 0.20 mm combined layers
-- internal solid infill: T0
+- internal solid infill: T0, 0.10 mm or 0.20 mm depending on overlap
 - no object extrusion on T2/T3
 - the checked profile had `inner_wall_combination = 0` and
   `infill_combination = 0`, so mixed-layer behavior was driven by
   `mixed_nozzle_mode = mixed_layer`
+
+Additional G-code-only validation for a 0.2/0.8 mm pairing passed:
+
+- outer wall: T1, 0.2 mm nozzle, 0.10 mm layers
+- inner wall: T0, 0.8 mm nozzle, 0.40 mm combined layers
+- sparse infill: T0, 0.8 mm nozzle, mostly 0.40 mm combined layers
+- internal solid infill: T0, remained 0.10 mm on the cube where no
+  four-layer-overlapped internal solid area was available
+- role/tool checker violations: 0
 
 Real print validation:
 
@@ -84,7 +95,8 @@ Real print validation:
 - Target slicer base: Snapmaker Orca branch based on Snapmaker Orca 2.3.4.
 - Real-print tested nozzle pairing: 0.4 mm logical T0 and 0.2 mm logical T1.
 
-Other nozzle pairings should use the same mode controls, but they have not been
+Other nozzle pairings should use the same mode controls. The 0.2/0.8 mm pairing
+has G-code validation for automatic 4-layer combining, but has not been
 real-print validated yet.
 
 ## Limitations
@@ -94,6 +106,9 @@ real-print validated yet.
   prints.
 - Mixed-layer internal walls are not geometry-aware across different Z slices
   yet. Complex sloped or thin geometry can still need slicer logic changes.
+- Mixed-layer internal solid infill is intersection-based and will only combine
+  fully overlapping internal-solid areas. Top and bottom surfaces intentionally
+  stay at the process layer height.
 - Same-layer mode still depends on the selected feature filaments and line
   widths being physically sensible for the installed nozzles.
 - Preview and material summaries can be confusing when multiple slots use the

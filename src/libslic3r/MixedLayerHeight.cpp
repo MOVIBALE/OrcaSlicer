@@ -1,8 +1,40 @@
 #include "MixedLayerHeight.hpp"
 
 #include <algorithm>
+#include <cmath>
 
 namespace Slic3r {
+
+namespace {
+
+constexpr int mixed_nozzle_min_layer_ratio = 2;
+constexpr int mixed_nozzle_max_layer_ratio = 8;
+
+int clamp_mixed_nozzle_layer_ratio(const int ratio)
+{
+    return std::min(std::max(mixed_nozzle_min_layer_ratio, ratio), mixed_nozzle_max_layer_ratio);
+}
+
+} // namespace
+
+int mixed_nozzle_auto_layer_height_ratio(const double fine_nozzle_diameter,
+                                         const double coarse_nozzle_diameter)
+{
+    if (fine_nozzle_diameter <= 0. || coarse_nozzle_diameter <= 0.)
+        return mixed_nozzle_min_layer_ratio;
+
+    return clamp_mixed_nozzle_layer_ratio(int(std::ceil(coarse_nozzle_diameter / fine_nozzle_diameter)));
+}
+
+int mixed_nozzle_effective_layer_height_ratio(const bool   auto_ratio,
+                                              const int    manual_ratio,
+                                              const double fine_nozzle_diameter,
+                                              const double coarse_nozzle_diameter)
+{
+    return auto_ratio ?
+               mixed_nozzle_auto_layer_height_ratio(fine_nozzle_diameter, coarse_nozzle_diameter) :
+               clamp_mixed_nozzle_layer_ratio(manual_ratio);
+}
 
 double mixed_nozzle_combined_layer_height(const double fine_layer_height,
                                           const double coarse_nozzle_diameter,
@@ -11,7 +43,7 @@ double mixed_nozzle_combined_layer_height(const double fine_layer_height,
     if (fine_layer_height <= 0. || coarse_nozzle_diameter <= 0.)
         return 0.;
 
-    const int ratio = std::max(2, layer_ratio);
+    const int ratio = clamp_mixed_nozzle_layer_ratio(layer_ratio);
     return std::min(fine_layer_height * double(ratio), coarse_nozzle_diameter);
 }
 

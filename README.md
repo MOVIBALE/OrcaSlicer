@@ -6,6 +6,20 @@
  
 ## Experimental U1 Feature Build
 
+### Alpha Download / Alpha 下载
+
+📥 **[Download the Experimental U1 Alpha build](https://github.com/MOVIBALE/OrcaSlicer/releases/tag/u1-experimental-2.3.5-alpha.1)**
+
+This pre-release page includes the Windows Installer, portable ZIP, source ZIP,
+and SHA-256 checksums. It is an Experimental/Alpha build for U1 mixed-nozzle and
+ESP32 Timelapse Box testing, not an official stable Snapmaker release.
+
+📥 **[下载 U1 实验版 Alpha 构建](https://github.com/MOVIBALE/OrcaSlicer/releases/tag/u1-experimental-2.3.5-alpha.1)**
+
+该 Pre-release 页面包含 Windows 安装包、便携 ZIP、源码 ZIP 和 SHA-256
+校验值。这是用于 U1 多口径/混合喷嘴与 ESP32 延时摄影盒子测试的
+Experimental/Alpha 版本，不是官方稳定版。
+
 This fork branch contains an experimental Snapmaker U1 mixed-nozzle workflow.
 It is not an official Snapmaker release.
 

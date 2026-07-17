@@ -94,18 +94,23 @@ constexpr const char* g_block3BorderColor = "#F0F0F0";
 constexpr const char* g_block3SeparatorColor = "#F3F4F6";
 constexpr const char* g_secondaryHoverBg = "#F3F4F6";
 
-std::vector<Slic3r::GUI::FilamentData> collectVisibleOverwriteMachineFilaments(
+std::vector<Slic3r::GUI::FilamentData> collectDirectOverrideFilaments(
+    const std::vector<Slic3r::GUI::FilamentData>& designDataList,
     const std::vector<Slic3r::GUI::FilamentData>& machineDataList,
-    size_t designCount)
+    const std::vector<int>& mapping)
 {
-    std::vector<Slic3r::GUI::FilamentData> visibleMachine;
-    size_t visibleCount = std::min(designCount, machineDataList.size());
-    visibleMachine.reserve(visibleCount);
-    for (size_t i = 0; i < visibleCount; ++i) {
-        if (!Slic3r::GUI::is_none_filament(machineDataList[i]))
-            visibleMachine.push_back(machineDataList[i]);
+    std::vector<Slic3r::GUI::FilamentData> synced;
+    synced.reserve(mapping.size());
+    for (size_t i = 0; i < mapping.size(); ++i) {
+        const int machineIndex = mapping[i];
+        if (machineIndex >= 0 && static_cast<size_t>(machineIndex) < machineDataList.size())
+            synced.push_back(machineDataList[static_cast<size_t>(machineIndex)]);
+        else if (i < designDataList.size())
+            synced.push_back(designDataList[i]);
+        else if (i < machineDataList.size())
+            synced.push_back(machineDataList[i]);
     }
-    return visibleMachine;
+    return synced;
 }
 
 } // namespace
@@ -397,7 +402,9 @@ std::vector<FilamentData> SyncFilamentColorDialog::getSyncDataList() const
         return dataList;
 
     if (!m_bMappingMode) {
-        return collectVisibleOverwriteMachineFilaments(m_machineDataList, m_designDataList.size());
+        const size_t syncCount = std::max(m_designDataList.size(), m_machineDataList.size());
+        const std::vector<int> mapping = compute_direct_override(syncCount, m_machineDataList);
+        return collectDirectOverrideFilaments(m_designDataList, m_machineDataList, mapping);
     }
 
     dataList = m_pFilamentColorMapBoxGroup->getCurFilamentList();
@@ -520,50 +527,21 @@ void SyncFilamentColorDialog::onCoverMatch()
 
     size_t designCount  = m_designDataList.size();
     size_t machineCount = m_machineDataList.size();
-    size_t visibleCount = std::min(designCount, machineCount);
     if (machineCount == 0) {
         m_filamentIdRemap.clear();
         return;
     }
 
-    // 1:1 positional mapping for UI display (includes NONE slots)
-    for (size_t i = 0; i < designCount; ++i) {
-        size_t m_idx = i % machineCount;
-        auto it = m_machineDataList.begin();
-        std::advance(it, m_idx);
-        m_pFilamentColorMapBoxGroup->updateBoxBelowData(static_cast<int>(i), *it);
-    }
+    const size_t syncCount = std::max(designCount, machineCount);
+    const std::vector<int> mapping = compute_direct_override(syncCount, m_machineDataList);
+    const std::vector<FilamentData> directData =
+        collectDirectOverrideFilaments(m_designDataList, m_machineDataList, mapping);
+    for (size_t i = 0; i < std::min(designCount, directData.size()); ++i)
+        m_pFilamentColorMapBoxGroup->updateBoxBelowData(static_cast<int>(i), directData[i]);
     m_pFilamentColorMapBoxGroup->setGroupBoxEnable(false, FilamentColorMapBox::ButtonType::Below);
 
-    // Build 1-based filament ID remap for overwrite mode.
-    // Cycle through non-NONE machine filaments only.
-    {
-        std::vector<size_t> validPos;
-        for (size_t j = 0; j < visibleCount; ++j) {
-            if (!is_none_filament(m_machineDataList[j]))
-                validPos.push_back(j);
-        }
-        size_t validCount = validPos.size();
-        if (validCount == 0) {
-            m_filamentIdRemap.clear();
-            return;
-        }
-
-        std::vector<unsigned int> machinePosToNewId(machineCount, 0);
-        unsigned int runningId = 0;
-        for (size_t j = 0; j < visibleCount; ++j) {
-            if (!is_none_filament(m_machineDataList[j])) {
-                ++runningId;
-                machinePosToNewId[j] = runningId;
-            }
-        }
-
-        m_filamentIdRemap.assign(designCount + 1, 0);
-        for (size_t old_id = 1; old_id <= designCount; ++old_id) {
-            size_t machine_pos = validPos[(old_id - 1) % validCount];
-            m_filamentIdRemap[old_id] = machinePosToNewId[machine_pos];
-        }
-    }
+    // Direct override never compacts slots, so feature/tool IDs remain stable.
+    m_filamentIdRemap.clear();
 
     // Overwrite mode: mark mixed filaments for deletion
     m_shouldDeleteMixedFilaments = true;
@@ -625,7 +603,9 @@ void SyncFilamentColorDialog::loadCoverPreview()
 
     std::vector<FilamentData> filamentMapping;
     if (!m_bMappingMode) {
-        filamentMapping = collectVisibleOverwriteMachineFilaments(m_machineDataList, m_designDataList.size());
+        const size_t syncCount = std::max(m_designDataList.size(), m_machineDataList.size());
+        const std::vector<int> mapping = compute_direct_override(syncCount, m_machineDataList);
+        filamentMapping = collectDirectOverrideFilaments(m_designDataList, m_machineDataList, mapping);
     } else if (m_pFilamentColorMapBoxGroup) {
         filamentMapping = m_pFilamentColorMapBoxGroup->getCurFilamentList();
     }

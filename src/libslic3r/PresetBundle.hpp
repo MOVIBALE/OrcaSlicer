@@ -39,6 +39,7 @@ struct ConnectMachineInfo
     std::vector<std::string> multiColors;
     Slic3r::FilamentColorMode colorMode { Slic3r::FilamentColorMode::Segment };
     int index {0};
+    int physical_index {-1};
 };
 
 namespace Slic3r {
@@ -208,7 +209,6 @@ public:
     DynamicPrintConfig          full_config() const;
     // full_config() with the some "useless" config removed.
     DynamicPrintConfig          full_config_secure() const;
-
     // Load user configuration and store it into the user profiles.
     // This method is called by the configuration wizard.
     void                        load_config_from_wizard(const std::string &name, DynamicPrintConfig config, Semver file_version, bool is_custom_defined = false)

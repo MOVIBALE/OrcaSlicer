@@ -378,6 +378,7 @@ protected:
 bool is_compatible_with_print  (const PresetWithVendorProfile &preset, const PresetWithVendorProfile &active_print, const PresetWithVendorProfile &active_printer);
 bool is_compatible_with_printer(const PresetWithVendorProfile &preset, const PresetWithVendorProfile &active_printer, const DynamicPrintConfig *extra_config);
 bool is_compatible_with_printer(const PresetWithVendorProfile &preset, const PresetWithVendorProfile &active_printer);
+std::string primary_nozzle_variant(const std::vector<double>& nozzle_diameters);
 
 enum class PresetSelectCompatibleType {
 	// Never select a compatible preset if the newly selected profile is not compatible.

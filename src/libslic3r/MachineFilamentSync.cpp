@@ -97,29 +97,6 @@ static std::string nozzle_diameter_for_slot(const nlohmann::json& status, const 
     return json_string_at(print_config, "nozzle_diameters", index);
 }
 
-static std::vector<size_t> logical_to_physical_map(const nlohmann::json& print_config, size_t slot_count)
-{
-    std::vector<size_t> map(slot_count);
-    for (size_t i = 0; i < slot_count; ++i)
-        map[i] = i;
-
-    if (!print_config.is_object() || !print_config.contains("extruder_map_table") || !print_config["extruder_map_table"].is_array())
-        return map;
-
-    const nlohmann::json& table = print_config["extruder_map_table"];
-    for (size_t logical_index = 0; logical_index < slot_count && logical_index < table.size(); ++logical_index) {
-        const nlohmann::json& value = table[logical_index];
-        if (!value.is_number_integer())
-            continue;
-
-        const int physical_index = value.get<int>();
-        if (physical_index >= 0 && static_cast<size_t>(physical_index) < slot_count)
-            map[logical_index] = static_cast<size_t>(physical_index);
-    }
-
-    return map;
-}
-
 static bool is_none_subtype(const std::string& subtype)
 {
     std::string upper = subtype;
@@ -206,13 +183,12 @@ std::vector<MachineFilamentSyncSlot> build_machine_filament_sync_slots(const nlo
         return {};
 
     const size_t slot_count = print_config["filament_type"].size();
-    const std::vector<size_t> extruder_map = logical_to_physical_map(print_config, slot_count);
 
     std::vector<MachineFilamentSyncSlot> slots;
     slots.reserve(slot_count);
 
     for (size_t i = 0; i < slot_count; ++i) {
-        const size_t physical_index = extruder_map[i];
+        const size_t physical_index = i;
         MachineFilamentSyncSlot slot;
         slot.slot_index      = i;
         slot.physical_index  = physical_index;
@@ -228,6 +204,17 @@ std::vector<MachineFilamentSyncSlot> build_machine_filament_sync_slots(const nlo
     }
 
     return slots;
+}
+
+std::vector<int> build_direct_filament_slot_mapping(size_t design_count, const std::vector<bool>& machine_slot_loaded)
+{
+    std::vector<int> mapping(design_count, -1);
+    const size_t common_count = std::min(design_count, machine_slot_loaded.size());
+    for (size_t i = 0; i < common_count; ++i) {
+        if (machine_slot_loaded[i])
+            mapping[i] = static_cast<int>(i);
+    }
+    return mapping;
 }
 
 } // namespace Slic3r

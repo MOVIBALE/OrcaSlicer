@@ -21,6 +21,10 @@ struct MachineFilamentSyncSlot
 
 std::vector<MachineFilamentSyncSlot> build_machine_filament_sync_slots(const nlohmann::json& response);
 
+// Direct printer sync preserves physical slot identity. Unloaded or unavailable
+// machine slots are returned as -1 so callers can keep the existing design slot.
+std::vector<int> build_direct_filament_slot_mapping(size_t design_count, const std::vector<bool>& machine_slot_loaded);
+
 } // namespace Slic3r
 
 #endif // slic3r_MachineFilamentSync_hpp_

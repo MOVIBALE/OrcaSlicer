@@ -15,6 +15,17 @@ int clamp_mixed_nozzle_layer_ratio(const int ratio)
     return std::min(std::max(mixed_nozzle_min_layer_ratio, ratio), mixed_nozzle_max_layer_ratio);
 }
 
+double mixed_nozzle_effective_coarse_max_layer_height(const double coarse_nozzle_diameter,
+                                                      const double coarse_max_layer_height)
+{
+    if (coarse_nozzle_diameter <= 0.)
+        return 0.;
+
+    return coarse_max_layer_height > 0. ?
+               std::min(coarse_max_layer_height, coarse_nozzle_diameter) :
+               coarse_nozzle_diameter;
+}
+
 } // namespace
 
 int mixed_nozzle_auto_layer_height_ratio(const double fine_nozzle_diameter,
@@ -36,15 +47,60 @@ int mixed_nozzle_effective_layer_height_ratio(const bool   auto_ratio,
                clamp_mixed_nozzle_layer_ratio(manual_ratio);
 }
 
+double mixed_nozzle_auto_coarse_layer_height(const double coarse_nozzle_diameter,
+                                             const double coarse_max_layer_height)
+{
+    const double max_layer_height = mixed_nozzle_effective_coarse_max_layer_height(coarse_nozzle_diameter,
+                                                                                  coarse_max_layer_height);
+    if (max_layer_height <= 0.)
+        return 0.;
+
+    return std::min(coarse_nozzle_diameter * 0.5, max_layer_height);
+}
+
+int mixed_nozzle_layer_height_ratio_from_target(const double fine_layer_height,
+                                                const double target_layer_height,
+                                                const double coarse_nozzle_diameter,
+                                                const double coarse_max_layer_height)
+{
+    const double max_layer_height = mixed_nozzle_effective_coarse_max_layer_height(coarse_nozzle_diameter,
+                                                                                  coarse_max_layer_height);
+    if (fine_layer_height <= 0. || target_layer_height <= 0. || max_layer_height <= 0.)
+        return 0;
+
+    const int requested_ratio = int(std::round(target_layer_height / fine_layer_height));
+    if (requested_ratio < mixed_nozzle_min_layer_ratio)
+        return 0;
+
+    int ratio = clamp_mixed_nozzle_layer_ratio(requested_ratio);
+    while (ratio >= mixed_nozzle_min_layer_ratio && fine_layer_height * double(ratio) > max_layer_height + 1e-6)
+        --ratio;
+
+    return ratio >= mixed_nozzle_min_layer_ratio ? ratio : 0;
+}
+
 double mixed_nozzle_combined_layer_height(const double fine_layer_height,
                                           const double coarse_nozzle_diameter,
+                                          const int    layer_ratio)
+{
+    return mixed_nozzle_combined_layer_height(fine_layer_height,
+                                             coarse_nozzle_diameter,
+                                             coarse_nozzle_diameter,
+                                             layer_ratio);
+}
+
+double mixed_nozzle_combined_layer_height(const double fine_layer_height,
+                                          const double coarse_nozzle_diameter,
+                                          const double coarse_max_layer_height,
                                           const int    layer_ratio)
 {
     if (fine_layer_height <= 0. || coarse_nozzle_diameter <= 0.)
         return 0.;
 
     const int ratio = clamp_mixed_nozzle_layer_ratio(layer_ratio);
-    return std::min(fine_layer_height * double(ratio), coarse_nozzle_diameter);
+    return std::min(fine_layer_height * double(ratio),
+                    mixed_nozzle_effective_coarse_max_layer_height(coarse_nozzle_diameter,
+                                                                   coarse_max_layer_height));
 }
 
 std::vector<size_t> build_mixed_layer_height_spans(const std::vector<double>& layer_heights,

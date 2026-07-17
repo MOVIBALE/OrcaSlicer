@@ -1293,8 +1293,20 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
     m_default_object_config.option("mixed_filament_surface_indentation", true);
     m_default_object_config.option("mixed_filament_region_collapse", true);
     m_default_object_config.option("mixed_filament_definitions", true);
+    auto used_filament_count = [this, &model, &new_full_config]() {
+        size_t count = this->extruders(true).size();
+        const CustomGCode::Info custom_gcode = model.get_curr_plate_custom_gcodes();
+        if (custom_gcode.mode == CustomGCode::MultiAsSingle) {
+            const auto* diameters = new_full_config.option<ConfigOptionFloats>("filament_diameter");
+            const size_t num_filaments = diameters == nullptr ? 0 : diameters->values.size();
+            if (!CustomGCode::custom_tool_changes(custom_gcode, num_filaments).empty())
+                count = std::max<size_t>(count, 2);
+        }
+        return int(count);
+    };
+
     // BBS
-    int used_filaments = this->extruders(true).size();
+    int used_filaments = used_filament_count();
 
     //new_full_config.normalize_fdm(used_filaments);
     new_full_config.normalize_fdm_1();
@@ -1790,7 +1802,7 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
     }
 
     //BBS: check the config again
-    int new_used_filaments = this->extruders(true).size();
+    int new_used_filaments = used_filament_count();
     t_config_option_keys new_changed_keys = new_full_config.normalize_fdm_2(objects().size(), new_used_filaments);
     if (new_changed_keys.size() > 0) {
         BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(", got new_changed_keys, size=%1%")%new_changed_keys.size();

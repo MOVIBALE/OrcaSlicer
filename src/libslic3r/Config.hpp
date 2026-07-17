@@ -1946,6 +1946,9 @@ public:
         return false;
     }
 
+    int enum_value_to_gui_index(int value) const;
+    int gui_index_to_enum_value(int index) const;
+
     // 0 is an invalid key.
     size_t 								serialization_key_ordinal = 0;
 

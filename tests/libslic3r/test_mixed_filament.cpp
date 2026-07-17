@@ -1180,7 +1180,9 @@ TEST_CASE("Mixed filament duplicate stable_id dedup on load", "[MixedFilament][S
 
 TEST_CASE("SER-REGRESS-01: manual_pattern preserved through serialize-load cycle", "[MixedFilament][Serialization]")
 {
-    const std::vector<std::string> colors = {"#FF0000", "#00FF00", "#0000FF", "#FFFF00"};
+    const std::vector<std::string> colors = {
+        "#FF0000", "#00FF00", "#0000FF", "#FFFF00", "#00FFFF", "#FF00FF"
+    };
 
     MixedFilamentManager mgr;
     mgr.auto_generate(colors);

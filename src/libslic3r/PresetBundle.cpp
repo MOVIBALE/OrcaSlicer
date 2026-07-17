@@ -3339,8 +3339,8 @@ std::pair<PresetsConfigSubstitutions, size_t> PresetBundle::load_vendor_configs_
         std::vector<std::string>  renamed_from;
         const DynamicPrintConfig* default_config = nullptr;
         std::string               reason;
+        std::map<std::string, std::string> key_values;
         try {
-            std::map<std::string, std::string> key_values;
             substitution_context.substitutions.clear();
 
             //parse the json elements

@@ -163,6 +163,8 @@ public:
     void on_filaments_delete(size_t filament_id);
     void init_color_mix_panel(wxWindow* parent, wxSizer* sizer);
     void update_color_mix_panel();
+    void init_mixed_nozzle_panel(wxWindow* parent, wxSizer* sizer);
+    void update_mixed_nozzle_panel();
     void update_mixed_filament_panel(bool sync_manager = true);
     std::vector<unsigned int> get_ui_ordered_filament_ids() const;
     // BBS

@@ -318,6 +318,28 @@ ConfigOption* ConfigOptionDef::create_default_option() const
     return this->create_empty_option();
 }
 
+int ConfigOptionDef::enum_value_to_gui_index(int value) const
+{
+    if (enum_keys_map == nullptr || enum_values.empty())
+        return value;
+
+    for (size_t index = 0; index < enum_values.size(); ++index) {
+        const auto mapped = enum_keys_map->find(enum_values[index]);
+        if (mapped != enum_keys_map->end() && mapped->second == value)
+            return int(index);
+    }
+    return 0;
+}
+
+int ConfigOptionDef::gui_index_to_enum_value(int index) const
+{
+    if (enum_keys_map == nullptr || index < 0 || size_t(index) >= enum_values.size())
+        return index;
+
+    const auto mapped = enum_keys_map->find(enum_values[size_t(index)]);
+    return mapped == enum_keys_map->end() ? index : mapped->second;
+}
+
 // Assignment of the serialization IDs is not thread safe. The Defs shall be initialized from the main thread!
 ConfigOptionDef* ConfigDef::add(const t_config_option_key &opt_key, ConfigOptionType type)
 {

@@ -179,6 +179,11 @@ double mixed_nozzle_diameter_for_filament(const PrintConfig &config, const int f
     return config.nozzle_diameter.get_at(std::max(1, filament) - 1);
 }
 
+double mixed_nozzle_max_layer_height_for_filament(const PrintConfig &config, const int filament)
+{
+    return config.max_layer_height.get_at(std::max(1, filament) - 1);
+}
+
 } // namespace
 
 // Constructor is called from the main thread, therefore all Model / ModelObject / ModelIntance data are valid.
@@ -1030,6 +1035,9 @@ bool PrintObject::invalidate_state_by_config_options(
             || opt_key == "inner_wall_combination"
             || opt_key == "inner_wall_combination_max_layer_height"
             || opt_key == "mixed_nozzle_mode"
+            || opt_key == "mixed_nozzle_inner_wall_combination"
+            || opt_key == "mixed_nozzle_auto_coarse_layer_height"
+            || opt_key == "mixed_nozzle_coarse_layer_height"
             || opt_key == "mixed_nozzle_auto_layer_height_ratio"
             || opt_key == "mixed_nozzle_layer_height_ratio"
             || opt_key == "infill_wall_overlap"
@@ -1207,6 +1215,10 @@ bool PrintObject::invalidate_state_by_config_options(
             || opt_key == "infill_combination"
             || opt_key == "infill_combination_max_layer_height"
             || opt_key == "mixed_nozzle_mode"
+            || opt_key == "mixed_nozzle_sparse_infill_combination"
+            || opt_key == "mixed_nozzle_internal_solid_infill_combination"
+            || opt_key == "mixed_nozzle_auto_coarse_layer_height"
+            || opt_key == "mixed_nozzle_coarse_layer_height"
             || opt_key == "mixed_nozzle_auto_layer_height_ratio"
             || opt_key == "mixed_nozzle_layer_height_ratio"
             || opt_key == "bottom_shell_thickness"
@@ -3355,9 +3367,10 @@ static void apply_to_print_region_config(PrintRegionConfig &out, const DynamicPr
     if (opt_extruder)
         if (int extruder = opt_extruder->value; extruder != 0) {
             const bool preserve_global_role_mapping =
-                extruder == 1 && has_role_specific_filaments(out) && !has_role_filament_override(in);
+                has_role_specific_filaments(out) && !has_role_filament_override(in);
             if (!preserve_global_role_mapping) {
-                // Not a default extruder.
+                // A generic object/tool assignment applies to every role only
+                // when the inherited process does not explicitly split roles.
                 out.sparse_infill_filament.value = extruder;
                 out.solid_infill_filament.value  = extruder;
                 out.wall_filament.value          = extruder;
@@ -4421,24 +4434,40 @@ void PrintObject::combine_infill()
     for (size_t region_id = 0; region_id < this->num_printing_regions(); ++ region_id) {
         const PrintRegion &region = this->printing_region(region_id);
         //BBS
-        const bool mixed_layer_mode     = region.config().mixed_nozzle_mode.value == MixedNozzleMode::MixedLayer;
-        const bool enable_combine_infill = region.config().infill_combination.value || mixed_layer_mode;
-        if (enable_combine_infill == false)
+        const bool mixed_layer_mode = region.config().mixed_nozzle_mode.value == MixedNozzleMode::MixedLayer;
+        const bool mixed_sparse_infill = mixed_layer_mode && region.config().mixed_nozzle_sparse_infill_combination.value;
+        const bool mixed_internal_solid_infill = mixed_layer_mode && region.config().mixed_nozzle_internal_solid_infill_combination.value;
+        if (mixed_layer_mode ? (!mixed_sparse_infill && !mixed_internal_solid_infill) : !region.config().infill_combination.value)
             continue;
 
         const std::vector<double> layer_heights = print_object_layer_heights(m_layers);
         const PrintConfig &print_config = this->print()->config();
         const auto mixed_max_combined_layer_height = [&](const int filament) {
             const int    coarse_filament   = std::max(1, filament);
+            const double fine_layer_height = mixed_nozzle_reference_layer_height(layer_heights);
             const double fine_nozzle       = mixed_nozzle_diameter_for_filament(print_config, mixed_nozzle_outer_wall_filament(region));
             const double coarse_nozzle     = mixed_nozzle_diameter_for_filament(print_config, coarse_filament);
-            const int    layer_ratio       = mixed_nozzle_effective_layer_height_ratio(region.config().mixed_nozzle_auto_layer_height_ratio.value,
-                                                                                      region.config().mixed_nozzle_layer_height_ratio.value,
-                                                                                      fine_nozzle,
-                                                                                      coarse_nozzle);
-            return mixed_nozzle_combined_layer_height(mixed_nozzle_reference_layer_height(layer_heights),
-                                                      coarse_nozzle,
-                                                      layer_ratio);
+            const double coarse_max_height = mixed_nozzle_max_layer_height_for_filament(print_config, coarse_filament);
+            int          layer_ratio       = 0;
+
+            if (region.config().mixed_nozzle_auto_coarse_layer_height.value) {
+                const double target_height = mixed_nozzle_auto_coarse_layer_height(coarse_nozzle, coarse_max_height);
+                layer_ratio = mixed_nozzle_layer_height_ratio_from_target(fine_layer_height, target_height, coarse_nozzle, coarse_max_height);
+            } else if (region.config().mixed_nozzle_coarse_layer_height.value > 0.) {
+                layer_ratio = mixed_nozzle_layer_height_ratio_from_target(fine_layer_height,
+                                                                          region.config().mixed_nozzle_coarse_layer_height.value,
+                                                                          coarse_nozzle,
+                                                                          coarse_max_height);
+            } else {
+                layer_ratio = mixed_nozzle_effective_layer_height_ratio(region.config().mixed_nozzle_auto_layer_height_ratio.value,
+                                                                        region.config().mixed_nozzle_layer_height_ratio.value,
+                                                                        fine_nozzle,
+                                                                        coarse_nozzle);
+            }
+
+            return layer_ratio > 0 ?
+                       mixed_nozzle_combined_layer_height(fine_layer_height, coarse_nozzle, coarse_max_height, layer_ratio) :
+                       0.;
         };
 
         const auto legacy_max_combined_layer_height = [&]() {
@@ -4532,11 +4561,12 @@ void PrintObject::combine_infill()
         };
 
         if (mixed_layer_mode) {
-            if (region.config().sparse_infill_density > 0. && fabs(region.config().sparse_infill_density.value - 100.) >= EPSILON)
+            if (mixed_sparse_infill && region.config().sparse_infill_density > 0. && fabs(region.config().sparse_infill_density.value - 100.) >= EPSILON)
                 combine_surface_type(stInternal, region.config().sparse_infill_pattern,
                                      mixed_max_combined_layer_height(region.config().sparse_infill_filament.value));
-            combine_surface_type(stInternalSolid, region.config().internal_solid_infill_pattern,
-                                 mixed_max_combined_layer_height(region.config().solid_infill_filament.value));
+            if (mixed_internal_solid_infill)
+                combine_surface_type(stInternalSolid, region.config().internal_solid_infill_pattern,
+                                     mixed_max_combined_layer_height(region.config().solid_infill_filament.value));
         } else {
             if (region.config().sparse_infill_density == 0.)
                 continue;
@@ -4561,25 +4591,44 @@ void PrintObject::combine_internal_walls()
     for (size_t region_id = 0; region_id < this->num_printing_regions(); ++region_id) {
         const PrintRegion &region = this->printing_region(region_id);
         const bool mixed_layer_mode = region.config().mixed_nozzle_mode.value == MixedNozzleMode::MixedLayer;
-        if ((!region.config().inner_wall_combination.value && !mixed_layer_mode) || region.config().wall_loops.value <= 1)
+        const bool enable_inner_wall_combination = mixed_layer_mode ?
+                                                       region.config().mixed_nozzle_inner_wall_combination.value :
+                                                       region.config().inner_wall_combination.value;
+        if (!enable_inner_wall_combination || region.config().wall_loops.value <= 1)
             continue;
 
         const PrintConfig &print_config = this->print()->config();
         const int wall_filament = std::max(1, region.config().wall_filament.value);
         double nozzle_diameter = mixed_nozzle_diameter_for_filament(print_config, wall_filament);
+        const double nozzle_max_layer_height = mixed_nozzle_max_layer_height_for_filament(print_config, wall_filament);
         const double inner_wall_combination_max_layer_height =
             region.config().inner_wall_combination_max_layer_height.get_abs_value(nozzle_diameter);
-        const int layer_ratio = mixed_nozzle_effective_layer_height_ratio(region.config().mixed_nozzle_auto_layer_height_ratio.value,
-                                                                          region.config().mixed_nozzle_layer_height_ratio.value,
-                                                                          mixed_nozzle_diameter_for_filament(print_config, mixed_nozzle_outer_wall_filament(region)),
-                                                                          nozzle_diameter);
-        const double max_combined_layer_height = mixed_layer_mode ?
-                                                     mixed_nozzle_combined_layer_height(mixed_nozzle_reference_layer_height(layer_heights),
-                                                                                        nozzle_diameter,
-                                                                                        layer_ratio) :
-                                                     (inner_wall_combination_max_layer_height > 0. ?
-                                                          std::min(inner_wall_combination_max_layer_height, nozzle_diameter) :
-                                                          nozzle_diameter);
+        double max_combined_layer_height = 0.;
+        if (mixed_layer_mode) {
+            const double fine_layer_height = mixed_nozzle_reference_layer_height(layer_heights);
+            int layer_ratio = 0;
+            if (region.config().mixed_nozzle_auto_coarse_layer_height.value) {
+                const double target_height = mixed_nozzle_auto_coarse_layer_height(nozzle_diameter, nozzle_max_layer_height);
+                layer_ratio = mixed_nozzle_layer_height_ratio_from_target(fine_layer_height, target_height, nozzle_diameter, nozzle_max_layer_height);
+            } else if (region.config().mixed_nozzle_coarse_layer_height.value > 0.) {
+                layer_ratio = mixed_nozzle_layer_height_ratio_from_target(fine_layer_height,
+                                                                          region.config().mixed_nozzle_coarse_layer_height.value,
+                                                                          nozzle_diameter,
+                                                                          nozzle_max_layer_height);
+            } else {
+                layer_ratio = mixed_nozzle_effective_layer_height_ratio(region.config().mixed_nozzle_auto_layer_height_ratio.value,
+                                                                        region.config().mixed_nozzle_layer_height_ratio.value,
+                                                                        mixed_nozzle_diameter_for_filament(print_config, mixed_nozzle_outer_wall_filament(region)),
+                                                                        nozzle_diameter);
+            }
+            max_combined_layer_height = layer_ratio > 0 ?
+                                            mixed_nozzle_combined_layer_height(fine_layer_height, nozzle_diameter, nozzle_max_layer_height, layer_ratio) :
+                                            0.;
+        } else {
+            max_combined_layer_height = inner_wall_combination_max_layer_height > 0. ?
+                                            std::min(inner_wall_combination_max_layer_height, nozzle_diameter) :
+                                            nozzle_diameter;
+        }
         if (max_combined_layer_height <= 0.)
             continue;
 

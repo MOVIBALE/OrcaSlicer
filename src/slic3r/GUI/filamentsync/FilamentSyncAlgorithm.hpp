@@ -14,7 +14,8 @@ std::vector<int> compute_color_match(
     const std::vector<GUI::FilamentData>& design_data,
     const std::vector<GUI::FilamentData>& machine_data);
 
-// Sequential 1:1 override: design[i] -> valid machine[i % validCount], skipping NONE slots.
+// Physical-slot override: design[i] -> machine[i]. NONE or missing machine
+// slots return -1 so the caller can preserve design[i].
 std::vector<int> compute_direct_override(
     size_t design_count,
     const std::vector<GUI::FilamentData>& machine_data);

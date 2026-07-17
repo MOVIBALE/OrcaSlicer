@@ -1624,22 +1624,37 @@ void SSWCP_Instance::update_filament_info(const json& objects, bool send_message
                 bool is_official = j_value["filament_official"][i].get<bool>();
                 ConnectMachineInfo machineData;
                 if (/*is_official*/ true) {
-                    std::string vendor   = j_value["filament_vendor"][i].get<std::string>();
-                    std::string type     = j_value["filament_type"][i].get<std::string>();
-                    std::string sub_type = j_value["filament_sub_type"][i].get<std::string>();
+                    const size_t physical_index = i;
+                    std::string vendor   = j_value["filament_vendor"][physical_index].get<std::string>();
+                    std::string type     = j_value["filament_type"][physical_index].get<std::string>();
+                    std::string sub_type = j_value["filament_sub_type"][physical_index].get<std::string>();
+
+                    bool filament_exists = true;
+                    if (j_value.count("filament_exist") && j_value["filament_exist"].is_array() &&
+                        j_value["filament_exist"].size() > physical_index) {
+                        const json& exists = j_value["filament_exist"][physical_index];
+                        if (exists.is_boolean())
+                            filament_exists = exists.get<bool>();
+                        else if (exists.is_number_integer())
+                            filament_exists = exists.get<int>() != 0;
+                    }
+                    if (!filament_exists)
+                        type = "NONE";
 
                     machineData.filament_type = type;
 
                     std::string name = "";
 
-                    if (sub_type == "Support") {
+                    if (!filament_exists) {
+                        name = "NONE";
+                    } else if (sub_type == "Support") {
                         name = vendor + " Support" + " For " + type;
                     } else {
                         name = vendor + " " + type + ((sub_type != "NONE" && sub_type != "") ? " " + sub_type : "");
                     }
 
-                    int extruder = j_value["extruder_map_table"][i].get<int>();
                     machineData.index = static_cast<int>(i);
+                    machineData.physical_index = static_cast<int>(physical_index);
                     machineData.filament_info = name;
 
                     json::const_iterator multiColorIt = j_value.find("filament_color_multi");
@@ -1668,15 +1683,16 @@ void SSWCP_Instance::update_filament_info(const json& objects, bool send_message
                     }
 
                     if (j_value.count("filament_color_rgba") && j_value["filament_color_rgba"].is_array() &&
-                        j_value["filament_color_rgba"].size() != 0) {
-                        std::string str_color = "#" + j_value["filament_color_rgba"][i].get<std::string>();
+                        j_value["filament_color_rgba"].size() > physical_index) {
+                        std::string str_color = "#" + j_value["filament_color_rgba"][physical_index].get<std::string>();
                         const std::string normalizedColor = FilamentColorUtils::NormalizeHexColor(str_color, "#FFFFFF");
                         str_color = normalizedColor.empty() ? str_color : normalizedColor;
                         filaments.insert({int(i), {name, str_color}});
                         machineData.color_info = str_color;
                     } else {
-                        if (j_value["filament_color"][i].is_number()) {
-                            int                color = j_value["filament_color"][i].get<int>();
+                        if (j_value["filament_color"].size() > physical_index &&
+                            j_value["filament_color"][physical_index].is_number()) {
+                            int                color = j_value["filament_color"][physical_index].get<int>();
                             std::ostringstream oss;
                             oss << "#" << std::uppercase << std::setfill('0') << std::setw(6) << std::hex
                                 << (color & 0x00FFFFFF); // 仅取低24位
@@ -1684,8 +1700,8 @@ void SSWCP_Instance::update_filament_info(const json& objects, bool send_message
                             std::string str_color = oss.str();
                             filaments.insert({int(i), {name, str_color}});
                             machineData.color_info    = str_color;
-                        } else {
-                            std::string str_color = "#" + j_value["filament_color"][i].get<std::string>();
+                        } else if (j_value["filament_color"].size() > physical_index) {
+                            std::string str_color = "#" + j_value["filament_color"][physical_index].get<std::string>();
                             const std::string normalizedColor = FilamentColorUtils::NormalizeHexColor(str_color, "#FFFFFF");
                             str_color = normalizedColor.empty() ? str_color : normalizedColor;
                             filaments.insert({int(i), {name, str_color}});
@@ -1696,8 +1712,8 @@ void SSWCP_Instance::update_filament_info(const json& objects, bool send_message
                         machineData.multiColors.emplace_back(machineData.color_info);
                     if (machineData.multiColors.size() <= 1)
                         machineData.colorMode = FilamentColorMode::Segment;
-                    if (j_value["nozzle_diameters"].is_array() && !j_value["nozzle_diameters"].empty())
-                        machineData.nozzle_info = j_value["nozzle_diameters"][i].get<std::string>();
+                    if (j_value["nozzle_diameters"].is_array() && j_value["nozzle_diameters"].size() > physical_index)
+                        machineData.nozzle_info = j_value["nozzle_diameters"][physical_index].get<std::string>();
                     machine_nozzles.push_back(machineData);
                 }
             }

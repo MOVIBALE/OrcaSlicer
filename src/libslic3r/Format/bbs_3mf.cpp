@@ -7872,7 +7872,7 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
                 //plate index
                 stream << "    <" << METADATA_TAG << " " << KEY_ATTR << "=\"" << PLATE_IDX_ATTR        << "\" " << VALUE_ATTR << "=\"" << plate_data->plate_index + 1 << "\"/>\n";
 
-                int timelapse_type = int(config.opt_enum<TimelapseType>("timelapse_type"));
+                int timelapse_type = timelapse_type_to_plate_metadata(config.opt_enum<TimelapseType>("timelapse_type"));
                 for (auto it = plate_data->warnings.begin(); it != plate_data->warnings.end(); it++) {
                     if (it->msg == NOT_GENERATE_TIMELAPSE) {
                         timelapse_type = -1;

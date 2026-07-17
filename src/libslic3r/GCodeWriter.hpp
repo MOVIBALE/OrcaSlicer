@@ -70,8 +70,8 @@ public:
     std::string set_speed(double F, const std::string &comment = std::string(), const std::string &cooling_marker = std::string());
     // SoftFever NOTE: the returned speed is mm/minute
     double      get_current_speed() const { return m_current_speed;}
-    std::string travel_to_xy(const Vec2d &point, const std::string &comment = std::string());
-    std::string travel_to_xyz(const Vec3d &point, const std::string &comment = std::string(), bool force_z = false);
+    std::string travel_to_xy(const Vec2d &point, const std::string &comment = std::string(), double travel_speed = 0.0);
+    std::string travel_to_xyz(const Vec3d &point, const std::string &comment = std::string(), bool force_z = false, double travel_speed = 0.0);
     std::string travel_to_z(double z, const std::string &comment = std::string(), bool force = false);
     bool        will_move_z(double z) const;
     std::string extrude_to_xy(const Vec2d &point, double dE, const std::string &comment = std::string(), bool force_no_extrusion = false);
@@ -82,6 +82,10 @@ public:
     std::string retract_for_toolchange(bool before_wipe = false, double retract_length = 0);
     std::string unretract();
     std::string lift(LiftType lift_type = LiftType::NormalLift, bool spiral_vase = false);
+    std::string force_lift(double minimum_lift, const std::string &comment = "force lift Z");
+    std::string force_lift(double minimum_lift, double maximum_z, const std::string &comment);
+    bool        update_nominal_z(double nominal_z);
+    bool        force_lift_active() const { return m_force_lift_until_unlift && m_lifted > EPSILON; }
     std::string unlift();
     const Vec3d& get_position() const { return m_pos; }
     Vec3d&       get_position() { return m_pos; }
@@ -149,6 +153,7 @@ public:
     int             m_last_bed_temperature;
     bool            m_last_bed_temperature_reached;
     double          m_lifted;
+    bool            m_force_lift_until_unlift{false};
 
     // BBS
     double          m_to_lift;

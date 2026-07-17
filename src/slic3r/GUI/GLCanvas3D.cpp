@@ -2736,19 +2736,22 @@ void GLCanvas3D::reload_scene(bool refresh_immediately, bool force_full_scene_re
     // BBS
     if (printer_technology == ptFFF && m_config->has("filament_colour") && (m_canvas_type != ECanvasType::CanvasAssembleView)) {
         // Should the wipe tower be visualized ?
-        unsigned int filaments_count = (unsigned int)dynamic_cast<const ConfigOptionStrings*>(m_config->option("filament_colour"))->values.size();
-
         bool wt = dynamic_cast<const ConfigOptionBool*>(m_config->option("enable_prime_tower"))->value;
         auto co = dynamic_cast<const ConfigOptionEnum<PrintSequence>*>(m_config->option<ConfigOptionEnum<PrintSequence>>("print_sequence"));
 
-        const DynamicPrintConfig &dconfig           = wxGetApp().preset_bundle->prints.get_edited_preset().config;
-        auto timelapse_type = dconfig.option<ConfigOptionEnum<TimelapseType>>("timelapse_type");
-        bool timelapse_enabled = timelapse_type ? (timelapse_type->value == TimelapseType::tlSmooth) : false;
+        const DynamicPrintConfig& process_config = wxGetApp().preset_bundle->prints.get_edited_preset().config;
+        const DynamicPrintConfig& printer_config = wxGetApp().preset_bundle->printers.get_edited_preset().config;
+        const DynamicPrintConfig  full_config    = wxGetApp().preset_bundle->full_config();
+        const bool smooth_timelapse_tower =
+            dynamic_print_config_uses_smooth_timelapse_tower(process_config, printer_config);
 
-        if (wt && (timelapse_enabled || filaments_count > 1)) {
+        if (wt) {
             for (int plate_id = 0; plate_id < n_plates; plate_id++) {
                 // If print ByObject and there is only one object in the plate, the wipe tower is allowed to be generated.
                 PartPlate* part_plate = ppl.get_plate(plate_id);
+                const size_t used_tools = part_plate->get_extruders(true).size();
+                if (!should_reserve_wipe_tower(wt, smooth_timelapse_tower, used_tools))
+                    continue;
                 if (part_plate->get_print_seq() == PrintSequence::ByObject ||
                     (part_plate->get_print_seq() == PrintSequence::ByDefault && co != nullptr && co->value == PrintSequence::ByObject)) {
                     if (ppl.get_plate(plate_id)->printable_instance_size() != 1)
@@ -2766,10 +2769,10 @@ void GLCanvas3D::reload_scene(bool refresh_immediately, bool force_full_scene_re
                 Vec3d plate_origin = ppl.get_plate(plate_id)->get_origin();
 
                 const Print* print = m_process->fff_print();
-                const auto& wipe_tower_data = print->wipe_tower_data(filaments_count);
+                const auto& wipe_tower_data = print->wipe_tower_data(std::max<size_t>(used_tools, 1));
                 float brim_width = wipe_tower_data.brim_width;
-                const DynamicPrintConfig &print_cfg   = wxGetApp().preset_bundle->prints.get_edited_preset().config;
-                Vec3d wipe_tower_size = ppl.get_plate(plate_id)->estimate_wipe_tower_size(print_cfg, w, wipe_tower_data.depth);
+                Vec3d wipe_tower_size =
+                    ppl.get_plate(plate_id)->estimate_wipe_tower_size(full_config, w, wipe_tower_data.depth, int(used_tools));
 
                 const float   margin     = WIPE_TOWER_MARGIN + tower_brim_width;
                 BoundingBoxf3 plate_bbox = wxGetApp().plater()->get_partplate_list().get_plate(plate_id)->get_bounding_box();

@@ -99,6 +99,58 @@ Vec2d travel_point_1;
 Vec2d travel_point_2;
 Vec2d travel_point_3;
 
+static bool esp32_timelapse_enabled(const PrintConfig &config)
+{
+    return print_config_uses_esp32_timelapse(config);
+}
+
+static std::string esp32_timelapse_command(const PrintConfig &config)
+{
+    return config.esp32_timelapse_gcode.value;
+}
+
+static std::string esp32_traditional_timelapse_gcode(const PrintConfig &config, int layer_index)
+{
+    std::string gcode;
+    gcode += "; ESP32_TIMELAPSE_TRADITIONAL_BEGIN layer=" + std::to_string(layer_index) + "\n";
+    gcode += "M400\n";
+    gcode += esp32_timelapse_command(config) + "\n";
+    gcode += "G4 P" + std::to_string(config.esp32_timelapse_dwell_ms.value) + "\n";
+    gcode += "; ESP32_TIMELAPSE_TRADITIONAL_END\n";
+    return gcode;
+}
+
+static std::string move_esp32_timelapse_block_to_layer_end(std::string gcode)
+{
+    static constexpr std::string_view traditional_begin = "; ESP32_TIMELAPSE_TRADITIONAL_BEGIN layer=";
+    static constexpr std::string_view traditional_end   = "; ESP32_TIMELAPSE_TRADITIONAL_END";
+    static constexpr std::string_view smooth_begin      = "; ESP32_TIMELAPSE_SMOOTH_BEGIN layer=";
+    static constexpr std::string_view smooth_end        = "; ESP32_TIMELAPSE_SMOOTH_END";
+
+    const size_t traditional_pos = gcode.find(traditional_begin);
+    const size_t smooth_pos      = gcode.find(smooth_begin);
+    const bool   is_traditional  = traditional_pos != std::string::npos &&
+                                  (smooth_pos == std::string::npos || traditional_pos < smooth_pos);
+    const size_t begin           = is_traditional ? traditional_pos : smooth_pos;
+    if (begin == std::string::npos)
+        return gcode;
+
+    const std::string_view end_marker = is_traditional ? traditional_end : smooth_end;
+    const size_t           end        = gcode.find(end_marker, begin);
+    if (end == std::string::npos)
+        return gcode;
+
+    size_t block_end = gcode.find('\n', end + end_marker.size());
+    block_end        = block_end == std::string::npos ? gcode.size() : block_end + 1;
+
+    std::string block = gcode.substr(begin, block_end - begin);
+    gcode.erase(begin, block_end - begin);
+    if (!gcode.empty() && gcode.back() != '\n')
+        gcode += '\n';
+    gcode += block;
+    return gcode;
+}
+
 static std::vector<Vec2d> get_path_of_change_filament(const Print& print)
 {
     // give safe value in case there is no start_end_points in config
@@ -729,9 +781,14 @@ std::string WipeTowerIntegration::append_tcr2(GCode& gcodegen, const WipeTower::
 
     std::string tcr_rotated_gcode = post_process_wipe_tower_moves(tcr, wipe_tower_offset, wipe_tower_rotation);
 
-    gcode += gcodegen.writer().unlift(); // Make sure there is no z-hop (in most cases, there isn't).
+    // ESP32 Smooth keeps its capture lift active until the next printable destination.
+    // Preserve that lift across the return XY move, then lower at the wipe tower.
+    const bool preserve_forced_lift = gcodegen.writer().force_lift_active();
+    if (!preserve_forced_lift)
+        gcode += gcodegen.writer().unlift(); // Make sure there is no z-hop (in most cases, there isn't).
 
-    double current_z = gcodegen.writer().get_position().z();
+    const double current_z = gcodegen.writer().get_position().z() -
+                             (preserve_forced_lift ? gcodegen.writer().get_zhop() : 0.0);
 
     if (z == -1.) // in case no specific z was provided, print at current_z pos
         z = current_z;
@@ -741,7 +798,8 @@ std::string WipeTowerIntegration::append_tcr2(GCode& gcodegen, const WipeTower::
     const bool is_ramming       = (gcodegen.config().single_extruder_multi_material) ||
                             (!gcodegen.config().single_extruder_multi_material &&
                              gcodegen.config().filament_multitool_ramming.get_at(tcr.initial_tool));
-    const bool should_travel_to_tower = !tcr.priming && (tcr.force_travel     // wipe tower says so
+    const bool should_travel_to_tower = !tcr.priming && (preserve_forced_lift // return safely from the timelapse park
+                                                         || tcr.force_travel  // wipe tower says so
                                                          || !needs_toolchange // this is just finishing the tower with no toolchange
                                                          || is_ramming);
 
@@ -761,10 +819,14 @@ std::string WipeTowerIntegration::append_tcr2(GCode& gcodegen, const WipeTower::
         gcodegen.m_avoid_crossing_perimeters.use_external_mp_once();
         gcode += gcodegen.travel_to(wipe_tower_point_to_object_point(gcodegen, start_pos + plate_origin_2d), erMixed,
                                     "Travel to a Wipe Tower");
+        if (preserve_forced_lift)
+            gcode += gcodegen.writer().unlift();
         gcode += gcodegen.unretract();
     } else {
         // When this is multiextruder printer without any ramming, we can just change
         // the tool without travelling to the tower.
+        if (preserve_forced_lift)
+            gcode += gcodegen.writer().unlift();
     }
 
     if (will_go_down) {
@@ -2156,6 +2218,8 @@ void GCode::_do_export(Print& print, GCodeOutputStream& file, ThumbnailsGenerato
     m_last_layer_z = 0.f;
     m_max_layer_z  = 0.f;
     m_last_width   = 0.f;
+    m_deferred_esp32_layer_index  = -1;
+    m_deferred_esp32_layer_height = 0.0;
     m_is_role_based_fan_on.fill(false);
 #if ENABLE_GCODE_VIEWER_DATA_CHECKING
     m_last_mm3_per_mm = 0.;
@@ -2568,27 +2632,31 @@ void GCode::_do_export(Print& print, GCodeOutputStream& file, ThumbnailsGenerato
 
         {
             // use first layer convex_hull union with each object's bbox to check whether in head detect zone
-            Polygons object_projections;
-            for (auto& obj : print.objects()) {
-                for (auto& instance : obj->instances()) {
-                    const auto& bbox = instance.get_bounding_box();
-                    Point       min_p{coord_t(scale_(bbox.min.x())), coord_t(scale_(bbox.min.y()))};
-                    Point       max_p{coord_t(scale_(bbox.max.x())), coord_t(scale_(bbox.max.y()))};
-                    Polygon     instance_projection = {{min_p.x(), min_p.y()},
-                                                       {max_p.x(), min_p.y()},
-                                                       {max_p.x(), max_p.y()},
-                                                       {min_p.x(), max_p.y()}};
-                    object_projections.emplace_back(std::move(instance_projection));
+            bool in_head_wrap_detect_zone = false;
+            if (!print.config().head_wrap_detect_zone.values.empty()) {
+                Polygons object_projections;
+                for (auto& obj : print.objects()) {
+                    for (auto& instance : obj->instances()) {
+                        const auto& bbox = instance.get_bounding_box();
+                        Point       min_p{coord_t(scale_(bbox.min.x())), coord_t(scale_(bbox.min.y()))};
+                        Point       max_p{coord_t(scale_(bbox.max.x())), coord_t(scale_(bbox.max.y()))};
+                        Polygon     instance_projection = {{min_p.x(), min_p.y()},
+                                                           {max_p.x(), min_p.y()},
+                                                           {max_p.x(), max_p.y()},
+                                                           {min_p.x(), max_p.y()}};
+                        object_projections.emplace_back(std::move(instance_projection));
+                    }
                 }
+                object_projections.emplace_back(print.first_layer_convex_hull());
+
+                Polygons project_polys = union_(object_projections);
+                Polygon  head_wrap_detect_zone;
+                for (auto& point : print.config().head_wrap_detect_zone.values)
+                    head_wrap_detect_zone.append(scale_(point).cast<coord_t>() + scale_(plate_offset).cast<coord_t>());
+
+                in_head_wrap_detect_zone = !intersection_pl(project_polys, {head_wrap_detect_zone}).empty();
             }
-            object_projections.emplace_back(print.first_layer_convex_hull());
-
-            Polygons project_polys = union_(object_projections);
-            Polygon  head_wrap_detect_zone;
-            for (auto& point : print.config().head_wrap_detect_zone.values)
-                head_wrap_detect_zone.append(scale_(point).cast<coord_t>() + scale_(plate_offset).cast<coord_t>());
-
-            this->placeholder_parser().set("in_head_wrap_detect_zone", !intersection_pl(project_polys, {head_wrap_detect_zone}).empty());
+            this->placeholder_parser().set("in_head_wrap_detect_zone", in_head_wrap_detect_zone);
         }
 
         BoundingBoxf mesh_bbox(m_config.bed_mesh_min, m_config.bed_mesh_max);
@@ -2987,9 +3055,16 @@ void GCode::_do_export(Print& print, GCodeOutputStream& file, ThumbnailsGenerato
                     file.write("M1003 S0\n");
                 }
             }
-            if (m_wipe_tower)
-                // Purge the extruder, pull out the active filament.
+            if (m_wipe_tower) {
+                // Purge the extruder and pull out the active filament before capturing the completed final layer.
                 file.write(m_wipe_tower->finalize(*this));
+                if (m_deferred_esp32_layer_index >= 0) {
+                    file.write(this->esp32_timelapse_gcode(
+                        print, m_deferred_esp32_layer_height, m_deferred_esp32_layer_index));
+                    m_deferred_esp32_layer_index  = -1;
+                    m_deferred_esp32_layer_height = 0.0;
+                }
+            }
         }
     }
     // BBS: the last retraction
@@ -3185,8 +3260,10 @@ void GCode::process_layers(const Print&                                         
                                                                                     return pa_processor.process_layer(std::move(in));
                                                                                 });
 
-    const auto output = tbb::make_filter<std::string, void>(slic3r_tbb_filtermode::serial_in_order,
-                                                            [&output_stream](std::string s) { output_stream.write(s); });
+    const auto output = tbb::make_filter<std::string, void>(
+        slic3r_tbb_filtermode::serial_in_order, [&output_stream](std::string s) {
+            output_stream.write(move_esp32_timelapse_block_to_layer_end(std::move(s)));
+        });
 
     const auto fan_mover = tbb::make_filter<std::string, std::string>(
         slic3r_tbb_filtermode::serial_in_order,
@@ -3289,8 +3366,10 @@ void GCode::process_layers(const Print&              print,
                                                                                     return pa_processor.process_layer(std::move(in));
                                                                                 });
 
-    const auto output = tbb::make_filter<std::string, void>(slic3r_tbb_filtermode::serial_in_order,
-                                                            [&output_stream](std::string s) { output_stream.write(s); });
+    const auto output = tbb::make_filter<std::string, void>(
+        slic3r_tbb_filtermode::serial_in_order, [&output_stream](std::string s) {
+            output_stream.write(move_esp32_timelapse_block_to_layer_end(std::move(s)));
+        });
 
     const auto fan_mover = tbb::make_filter<std::string, std::string>(
         slic3r_tbb_filtermode::serial_in_order,
@@ -4688,6 +4767,59 @@ std::string GCode::generate_skirt(const Print&                     print,
 // In non-sequential mode, process_layer is called per each print_z height with all object and support layers accumulated.
 // For multi-material prints, this routine minimizes extruder switches by gathering extruder specific extrusion paths
 // and performing the extruder specific extrusions together.
+std::string GCode::esp32_timelapse_gcode(const Print& print, double layer_height, int layer_index)
+{
+    if (!esp32_timelapse_enabled(print.config()))
+        return {};
+
+    if (!gcode_has_executable_lines(print.config().esp32_timelapse_gcode.value))
+        throw SlicingError(_(L("ESP32 Timelapse Box is enabled by the printer profile, but no frame command is configured. Configure esp32_timelapse_gcode before slicing.")));
+
+    if (print.config().esp32_timelapse_dwell_ms.value < ESP32_TIMELAPSE_MIN_DWELL_MS)
+        throw SlicingError(_(L("ESP32 Timelapse Box dwell must be at least 2000 ms so polling and camera exposure complete before printing resumes.")));
+
+    if (print.config().timelapse_type.value != TimelapseType::tlSmooth)
+        return esp32_traditional_timelapse_gcode(print.config(), layer_index);
+
+    if (!print_config_has_valid_esp32_park_position(print.config()))
+        throw SlicingError(_(L("ESP32 Timelapse Box Smooth mode requires an explicit park position inside the printable area and outside bed exclusion areas.")));
+
+    double minimum_lift = std::max(0.2, layer_height);
+    if (const Extruder* extruder = m_writer.extruder(); extruder != nullptr)
+        minimum_lift = std::max(minimum_lift, m_config.z_hop.get_at(extruder->id()));
+    const double nominal_z = m_writer.get_position().z() - m_writer.get_zhop();
+    const double available_lift = print.config().printable_height.value - nominal_z;
+    if (available_lift + EPSILON < minimum_lift)
+        throw SlicingError(_(L("ESP32 Timelapse Box Smooth mode does not have enough Z clearance to park safely.")));
+
+    std::string gcode;
+    gcode += "; ESP32_TIMELAPSE_SMOOTH_BEGIN layer=" + std::to_string(layer_index) + "\n";
+    gcode += this->retract(false, false, LiftType::NormalLift);
+    gcode += m_writer.force_lift(
+        minimum_lift, print.config().printable_height.value, "ESP32 Timelapse Box Smooth lift");
+
+    const Vec2f writer_offset = m_writer.get_xy_offset();
+    const Vec2d park_writer_position(
+        print.config().esp32_timelapse_park_x.value + writer_offset.x(),
+        print.config().esp32_timelapse_park_y.value + writer_offset.y());
+    const Point park_point = this->gcode_to_point(park_writer_position);
+    m_need_change_layer_lift_z = false;
+    m_avoid_crossing_perimeters.reset_once_modifiers();
+    gcode += m_writer.travel_to_xy(
+        park_writer_position, "ESP32 Timelapse Box Smooth park",
+        print.config().esp32_timelapse_travel_speed.value / 60.0);
+    this->set_last_pos(park_point);
+
+    gcode += "M400\n";
+    gcode += "SAVE_GCODE_STATE NAME=ESP32_TIMELAPSE_SMOOTH\n";
+    gcode += "G90\n";
+    gcode += esp32_timelapse_command(print.config()) + "\n";
+    gcode += "G4 P" + std::to_string(print.config().esp32_timelapse_dwell_ms.value) + "\n";
+    gcode += "RESTORE_GCODE_STATE NAME=ESP32_TIMELAPSE_SMOOTH\n";
+    gcode += "; ESP32_TIMELAPSE_SMOOTH_END\n";
+    return gcode;
+}
+
 LayerResult GCode::process_layer(const Print& print,
                                  // Set of object & print layers of the same PrintObject and with the same print_z.
                                  const std::vector<LayerToPrint>& layers,
@@ -4786,20 +4918,21 @@ LayerResult GCode::process_layer(const Print& print,
         config.set_key_value("layer_num", new ConfigOptionInt(m_layer_index + 1));
         config.set_key_value("layer_z", new ConfigOptionFloat(print_z));
         config.set_key_value("max_layer_z", new ConfigOptionFloat(m_max_layer_z));
-        gcode += this->placeholder_parser_process("before_layer_change_gcode", print.config().before_layer_change_gcode.value,
-                                                  m_writer.extruder()->id(), &config) +
-                 "\n";
+        const std::string before_layer_gcode = this->placeholder_parser_process(
+            "before_layer_change_gcode", print.config().before_layer_change_gcode.value,
+            m_writer.extruder()->id(), &config);
+        gcode += before_layer_gcode + "\n";
     }
 
     PrinterStructure printer_structure                           = m_config.printer_structure.value;
     bool             need_insert_timelapse_gcode_for_traditional = false;
-    if (printer_structure == PrinterStructure::psI3 && !m_spiral_vase && (!m_wipe_tower || !m_wipe_tower->enable_timelapse_print()) &&
+    if (printer_structure == PrinterStructure::psI3 && !m_spiral_vase &&
+        (!m_wipe_tower || !m_wipe_tower->enable_timelapse_print()) &&
         print.config().print_sequence == PrintSequence::ByLayer) {
         need_insert_timelapse_gcode_for_traditional = true;
     }
     bool has_insert_timelapse_gcode = false;
     bool has_wipe_tower             = (layer_tools.has_wipe_tower && m_wipe_tower);
-
     auto insert_timelapse_gcode = [this, print_z, &print]() -> std::string {
         std::string gcode_res;
         if (!m_config.time_lapse_gcode.value.empty()) {
@@ -4812,6 +4945,9 @@ LayerResult GCode::process_layer(const Print& print,
                         "\n";
         }
         return gcode_res;
+    };
+    auto insert_esp32_timelapse_gcode = [&print, &layer, this]() -> std::string {
+        return this->esp32_timelapse_gcode(print, layer.height, m_layer_index);
     };
 
     // BBS: don't use lazy_raise when enable spiral vase
@@ -4835,24 +4971,19 @@ LayerResult GCode::process_layer(const Print& print,
             }
         }
     } else {
-        if (!m_config.time_lapse_gcode.value.empty()) {
-            DynamicConfig config;
-            config.set_key_value("layer_num", new ConfigOptionInt(m_layer_index));
-            config.set_key_value("layer_z", new ConfigOptionFloat(print_z));
-            config.set_key_value("max_layer_z", new ConfigOptionFloat(m_max_layer_z));
-            gcode += this->placeholder_parser_process("timelapse_gcode", print.config().time_lapse_gcode.value, m_writer.extruder()->id(),
-                                                      &config) +
-                     "\n";
+        if (print_config_uses_native_timelapse(print.config()) && !m_config.time_lapse_gcode.value.empty()) {
+            gcode += insert_timelapse_gcode();
         }
     }
     if (!m_config.layer_change_gcode.value.empty()) {
         DynamicConfig config;
         config.set_key_value("layer_num", new ConfigOptionInt(m_layer_index));
         config.set_key_value("layer_z", new ConfigOptionFloat(print_z));
-        gcode += this->placeholder_parser_process("layer_change_gcode", print.config().layer_change_gcode.value, m_writer.extruder()->id(),
-                                                  &config) +
-                 "\n";
         config.set_key_value("max_layer_z", new ConfigOptionFloat(m_max_layer_z));
+        const std::string layer_change_gcode = this->placeholder_parser_process(
+            "layer_change_gcode", print.config().layer_change_gcode.value,
+            m_writer.extruder()->id(), &config);
+        gcode += layer_change_gcode + "\n";
     }
     // BBS: set layer time fan speed after layer change gcode
     gcode += ";_SET_FAN_SPEED_CHANGING_LAYER\n";
@@ -6284,6 +6415,7 @@ LayerResult GCode::process_layer(const Print& print,
         if (it != layer_extruders.end())
             std::rotate(layer_extruders.begin(), it, layer_extruders.end());
     }
+
     // Extrude the skirt, brim, support, perimeters, infill ordered by the extruders.
     for (unsigned int extruder_id : layer_extruders) {
         if (print.config().skirt_type == stCombined && !print.skirt().empty())
@@ -6332,7 +6464,7 @@ LayerResult GCode::process_layer(const Print& print,
 
         // BBS: ordering instances by extruder
         std::vector<InstanceToPrint> instances_to_print;
-        bool                         has_prime_tower = print.config().enable_prime_tower && print.extruders().size() > 1 &&
+        bool                         has_prime_tower = print.has_wipe_tower() &&
                                ((print.config().print_sequence == PrintSequence::ByLayer &&
                                  print.config().print_order == PrintOrder::Default) ||
                                 (print.config().print_sequence == PrintSequence::ByObject && print.objects().size() == 1));
@@ -6643,6 +6775,16 @@ LayerResult GCode::process_layer(const Print& print,
         }
     }
 
+    // Capture the completed layer. This avoids an empty first frame and ensures the final model layer is photographed.
+    if (esp32_timelapse_enabled(m_config)) {
+        if (last_layer && m_wipe_tower) {
+            m_deferred_esp32_layer_index  = m_layer_index;
+            m_deferred_esp32_layer_height = layer.height;
+        } else {
+            gcode += insert_esp32_timelapse_gcode();
+        }
+    }
+
     if (pointillism_path_split_entities > 0) {
         BOOST_LOG_TRIVIAL(warning) << "Same-layer pointillisme path-domain split"
                                    << " layer_id=" << layer.id()
@@ -6774,10 +6916,8 @@ std::string GCode::change_layer(coordf_t print_z)
         gcode += m_writer.travel_to_z(z, comment.str());
     }
 
-    m_need_change_layer_lift_z = true;
-
     m_nominal_z                 = z;
-    m_writer.get_position().z() = z;
+    m_need_change_layer_lift_z  = !m_writer.update_nominal_z(z);
 
     // forget last wiping path as wiping after raising Z is pointless
     // BBS. Dont forget wiping path to reduce stringing.
@@ -8156,7 +8296,7 @@ std::string GCode::_encode_label_ids_to_base64(std::vector<size_t> ids)
 }
 
 // This method accepts &point in print coordinates.
-std::string GCode::travel_to(const Point& point, ExtrusionRole role, std::string comment, double z /* = DBL_MAX*/)
+std::string GCode::travel_to(const Point& point, ExtrusionRole role, std::string comment, double z /* = DBL_MAX*/, double travel_speed /* = 0.0 */)
 {
     /*  Define the travel move as a line between current position and the taget point.
         This is expressed in print coordinates, so it will need to be translated by
@@ -8254,14 +8394,14 @@ std::string GCode::travel_to(const Point& point, ExtrusionRole role, std::string
         if (false /*m_spiral_vase*/) {
             // No lazy z lift for spiral vase mode
             for (size_t i = 1; i < travel.size(); ++i) {
-                gcode += m_writer.travel_to_xy(this->point_to_gcode(travel.points[i]), comment);
+                gcode += m_writer.travel_to_xy(this->point_to_gcode(travel.points[i]), comment, travel_speed);
             }
         } else {
             if (travel.size() == 2) {
                 // No extra movements emitted by avoid_crossing_perimeters, simply move to the end point with z change
                 const auto& dest2d = this->point_to_gcode(travel.points.back());
                 Vec3d       dest3d(dest2d(0), dest2d(1), z == DBL_MAX ? m_nominal_z : z);
-                gcode += m_writer.travel_to_xyz(dest3d, comment, m_need_change_layer_lift_z);
+                gcode += m_writer.travel_to_xyz(dest3d, comment, m_need_change_layer_lift_z, travel_speed);
                 m_need_change_layer_lift_z = false;
             } else {
                 // Extra movements emitted by avoid_crossing_perimeters, lift the z to normal height at the beginning, then apply the z
@@ -8271,16 +8411,16 @@ std::string GCode::travel_to(const Point& point, ExtrusionRole role, std::string
                         // Lift to normal z at beginning
                         Vec2d dest2d = this->point_to_gcode(travel.points[i]);
                         Vec3d dest3d(dest2d(0), dest2d(1), m_nominal_z);
-                        gcode += m_writer.travel_to_xyz(dest3d, comment, m_need_change_layer_lift_z);
+                        gcode += m_writer.travel_to_xyz(dest3d, comment, m_need_change_layer_lift_z, travel_speed);
                         m_need_change_layer_lift_z = false;
                     } else if (z != DBL_MAX && i == travel.size() - 1) {
                         // Apply z_ratio for the very last point
                         Vec2d dest2d = this->point_to_gcode(travel.points[i]);
                         Vec3d dest3d(dest2d(0), dest2d(1), z);
-                        gcode += m_writer.travel_to_xyz(dest3d, comment);
+                        gcode += m_writer.travel_to_xyz(dest3d, comment, false, travel_speed);
                     } else {
                         // For all points in between, no z change
-                        gcode += m_writer.travel_to_xy(this->point_to_gcode(travel.points[i]), comment);
+                        gcode += m_writer.travel_to_xy(this->point_to_gcode(travel.points[i]), comment, travel_speed);
                     }
                 }
             }

@@ -1601,8 +1601,22 @@ void Tab::on_value_change(const std::string& opt_key, const boost::any& value)
 
     if (opt_key == "enable_prime_tower") {
         auto timelapse_type = m_config->option<ConfigOptionEnum<TimelapseType>>("timelapse_type");
-        bool timelapse_enabled = timelapse_type->value == TimelapseType::tlSmooth;
-        if (!boost::any_cast<bool>(value) && timelapse_enabled) {
+        const DynamicPrintConfig& printer_config = wxGetApp().preset_bundle->printers.get_edited_preset().config;
+        const bool legacy_smooth = timelapse_type->value == TimelapseType::tlSmooth &&
+                                   !dynamic_print_config_supports_esp32_timelapse(printer_config);
+        const bool esp32_smooth = timelapse_type->value == TimelapseType::tlSmooth &&
+                                  dynamic_print_config_supports_esp32_timelapse(printer_config);
+        if (!boost::any_cast<bool>(value) && esp32_smooth) {
+            MessageDialog dlg(
+                wxGetApp().plater(),
+                _L("ESP32 Timelapse Box Smooth mode generates a prime tower on every captured layer. It increases material use and print time, and cannot be disabled while Smooth mode is selected."),
+                _L("Prime tower required"), wxICON_WARNING | wxOK);
+            dlg.ShowModal();
+            DynamicPrintConfig new_conf = *m_config;
+            new_conf.set_key_value("enable_prime_tower", new ConfigOptionBool(true));
+            m_config_manipulation.apply(m_config, &new_conf);
+            wxGetApp().plater()->update();
+        } else if (!boost::any_cast<bool>(value) && legacy_smooth) {
             MessageDialog dlg(wxGetApp().plater(), _L("A prime tower is required for smooth timelapse. There may be flaws on the model without prime tower. Are you sure you want to disable prime tower?"),
                               _L("Warning"), wxICON_WARNING | wxYES | wxNO);
             if (dlg.ShowModal() == wxID_NO) {
@@ -1635,27 +1649,19 @@ void Tab::on_value_change(const std::string& opt_key, const boost::any& value)
     if(opt_key == "purge_in_prime_tower")
         wxGetApp().get_tab(Preset::TYPE_PRINT)->update();
 
-
-    if (opt_key == "enable_prime_tower") {
-        auto timelapse_type = m_config->option<ConfigOptionEnum<TimelapseType>>("timelapse_type");
-        bool timelapse_enabled = timelapse_type->value == TimelapseType::tlSmooth;
-        if (!boost::any_cast<bool>(value) && timelapse_enabled) {
-            MessageDialog dlg(wxGetApp().plater(), _L("A prime tower is required for smooth timelapse. There may be flaws on the model without prime tower. Are you sure you want to disable prime tower?"),
-                              _L("Warning"), wxICON_WARNING | wxYES | wxNO);
-            if (dlg.ShowModal() == wxID_NO) {
-                DynamicPrintConfig new_conf = *m_config;
-                new_conf.set_key_value("enable_prime_tower", new ConfigOptionBool(true));
-                m_config_manipulation.apply(m_config, &new_conf);
-            }
-            wxGetApp().plater()->update();
-        }
-        update_wiping_button_visibility();
-    }
-
     // reload scene to update timelapse wipe tower
     if (opt_key == "timelapse_type") {
+        const TimelapseType selected_type = static_cast<TimelapseType>(boost::any_cast<int>(value));
+        const DynamicPrintConfig& printer_config = wxGetApp().preset_bundle->printers.get_edited_preset().config;
+        const bool esp32_enabled = dynamic_print_config_supports_esp32_timelapse(printer_config);
+
         bool wipe_tower_enabled = m_config->option<ConfigOptionBool>("enable_prime_tower")->value;
-        if (!wipe_tower_enabled && boost::any_cast<int>(value) == (int)TimelapseType::tlSmooth) {
+        if (!wipe_tower_enabled && esp32_enabled && selected_type == TimelapseType::tlSmooth) {
+            DynamicPrintConfig new_conf = *m_config;
+            new_conf.set_key_value("enable_prime_tower", new ConfigOptionBool(true));
+            m_config_manipulation.apply(m_config, &new_conf);
+            wxGetApp().plater()->update();
+        } else if (!wipe_tower_enabled && !esp32_enabled && selected_type == TimelapseType::tlSmooth) {
             MessageDialog dlg(wxGetApp().plater(), _L("A prime tower is required for smooth timelapse. There may be flaws on the model without prime tower. Do you want to enable prime tower?"),
                               _L("Warning"), wxICON_WARNING | wxYES | wxNO);
             if (dlg.ShowModal() == wxID_YES) {
@@ -2451,6 +2457,11 @@ void TabPrint::build()
         optgroup->append_single_option_line("internal_bridge_angle", "strength_settings_advanced#bridge-infill-direction"); // ORCA: Internal bridge angle override
         optgroup->append_single_option_line("minimum_sparse_infill_area", "strength_settings_advanced#minimum-sparse-infill-threshold");
         optgroup->append_single_option_line("mixed_nozzle_mode");
+        optgroup->append_single_option_line("mixed_nozzle_sparse_infill_combination");
+        optgroup->append_single_option_line("mixed_nozzle_inner_wall_combination");
+        optgroup->append_single_option_line("mixed_nozzle_internal_solid_infill_combination");
+        optgroup->append_single_option_line("mixed_nozzle_auto_coarse_layer_height");
+        optgroup->append_single_option_line("mixed_nozzle_coarse_layer_height");
         optgroup->append_single_option_line("mixed_nozzle_auto_layer_height_ratio");
         optgroup->append_single_option_line("mixed_nozzle_layer_height_ratio");
         optgroup->append_single_option_line("inner_wall_combination", "strength_settings_advanced#infill-combination");
@@ -4438,6 +4449,9 @@ void TabPrinter::build_fff()
         option.opt.is_code = true;
         option.opt.height = gcode_field_height;//150;
         optgroup->append_single_option_line(option);
+
+        optgroup = page->new_optgroup(L("ESP32 Timelapse Box"), L"param_gcode", 0);
+        optgroup->append_single_option_line("supports_esp32_timelapse");
 
         optgroup = page->new_optgroup(L("Change filament G-code"), L"param_gcode", 0);
         optgroup->m_on_change = [this, &optgroup_title = optgroup->title](const t_config_option_key& opt_key, const boost::any& value) {

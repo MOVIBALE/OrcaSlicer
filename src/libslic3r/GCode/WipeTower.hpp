@@ -25,6 +25,7 @@ public:
 
 	// WipeTower height to minimum depth map
 	static const std::map<float, float> min_depth_per_height;
+	static float minimum_depth_for_height(float tower_height);
 
     struct Extrusion
     {
@@ -284,7 +285,7 @@ private:
         return m_filpar[0].filament_area; // all extruders are assumed to have the same filament diameter at this point
     }
 
-	bool   m_enable_timelapse_print = false;
+	bool   m_enable_smooth_timelapse_tower = false;
 	bool   m_semm               = true; // Are we using a single extruder multimaterial printer?
 	bool   m_purge_in_prime_tower = false; // Do we purge in the prime tower?
     Vec2f  m_wipe_tower_pos; 			// Left front corner of the wipe tower in mm.

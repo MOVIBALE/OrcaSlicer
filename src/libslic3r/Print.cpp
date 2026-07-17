@@ -590,6 +590,12 @@ bool Print::invalidate_state_by_config_options(const ConfigOptionResolver & /* n
         "gcode_add_line_number",
         "layer_change_gcode",
         "time_lapse_gcode",
+        "supports_esp32_timelapse",
+        "esp32_timelapse_gcode",
+        "esp32_timelapse_park_x",
+        "esp32_timelapse_park_y",
+        "esp32_timelapse_travel_speed",
+        "esp32_timelapse_dwell_ms",
         "fan_min_speed",
         "fan_max_speed",
         "printable_height",
@@ -748,6 +754,7 @@ bool Print::invalidate_state_by_config_options(const ConfigOptionResolver & /* n
             || opt_key == "hot_plate_temp"
             || opt_key == "textured_plate_temp" 
             || opt_key == "graphic_effect_plate_temp"
+            || opt_key == "timelapse_type"
             || opt_key == "enable_prime_tower"
             || opt_key == "prime_tower_width"
             || opt_key == "prime_tower_brim_width"
@@ -1456,6 +1463,9 @@ static StringObjectException layered_print_cleareance_valid(const Print &print, 
         convex_hulls_temp.push_back(wipe_tower_convex_hull);
     }
     if (!intersection(convex_hulls_other, convex_hulls_temp).empty()) {
+        if (print_config_uses_smooth_timelapse_tower(config))
+            return { L("Smooth timelapse prime tower overlaps the model. Move the prime tower before slicing."), nullptr,
+                     "wipe_tower_x" };
         if (warning) {
             warning->string += L("Prime Tower") + L(" is too close to others, and collisions may be caused.\n");
         }
@@ -1547,6 +1557,97 @@ StringObjectException Print::check_multi_filament_valid(const Print& print)
 // Matches "G92 E0" with various forms of writing the zero and with an optional comment.
 boost::regex regex_g92e0 { "^[ \\t]*[gG]92[ \\t]*[eE](0(\\.0*)?|\\.0+)[ \\t]*(;.*)?$" };
 
+static bool smooth_timelapse_tower_fits_printable_area(const Print& print)
+{
+    const PrintConfig& config = print.config();
+    const Points bed_points = get_bed_shape(config);
+    if (bed_points.size() < 3)
+        return false;
+
+    float tower_height = 0.f;
+    for (const PrintObject* object : print.objects())
+        tower_height = std::max(tower_height, float(object->model_object()->bounding_box_exact().size().z()));
+
+    const double brim = config.prime_tower_brim_width.value;
+    const double perimeter_width = config.nozzle_diameter.values.empty() ? 0.5 :
+        1.25 * *std::max_element(config.nozzle_diameter.values.begin(), config.nozzle_diameter.values.end());
+    const double width = config.prime_tower_width.value + 2.0 * brim;
+    const double depth = WipeTower::minimum_depth_for_height(tower_height) + perimeter_width + 2.0 * brim;
+    const double angle = Geometry::deg2rad(config.wipe_tower_rotation_angle.value);
+    const Vec2d position(config.wipe_tower_x.get_at(print.get_plate_index()),
+                         config.wipe_tower_y.get_at(print.get_plate_index()));
+    const Eigen::Rotation2Dd rotation(angle);
+    const Polygon printable_area(bed_points);
+
+    for (const Vec2d& local : { Vec2d(-brim, -brim), Vec2d(width - brim, -brim),
+                                Vec2d(width - brim, depth - brim), Vec2d(-brim, depth - brim) }) {
+        const Vec2d point = rotation * local + position;
+        if (!printable_area.contains(Point::new_scale(point.x(), point.y())))
+            return false;
+    }
+    return true;
+}
+
+static Polygon print_instance_model_convex_hull(const PrintInstance& instance)
+{
+    const ModelInstance* model_instance = instance.model_instance;
+    Polygon convex_hull = instance.print_object->model_object()->convex_hull_2d(
+        Geometry::assemble_transform(Vec3d::Zero(), model_instance->get_rotation(),
+                                     model_instance->get_scaling_factor(), model_instance->get_mirror()));
+    convex_hull.translate(instance.shift - instance.print_object->center_offset());
+    return convex_hull;
+}
+
+static void validate_generated_esp32_smooth_placement(const Print& print)
+{
+    if (!print_config_uses_esp32_timelapse(print.config()) ||
+        print.config().timelapse_type.value != TimelapseType::tlSmooth)
+        return;
+
+    Points tower_points = print.first_layer_wipe_tower_corners();
+    if (tower_points.size() < 3)
+        throw SlicingError(L("Smooth timelapse failed to generate a usable prime tower."));
+
+    const Polygon  tower_footprint = Geometry::convex_hull(std::move(tower_points));
+    const Polygons tower_polygons { tower_footprint };
+
+    Polygon printable_area(get_bed_shape(print.config()));
+    const Vec3d plate_origin = print.get_plate_origin();
+    printable_area.translate(scale_(plate_origin.x()), scale_(plate_origin.y()));
+    if (!diff(tower_polygons, Polygons { printable_area }).empty()) {
+        throw SlicingError(L("Smooth timelapse requires the generated prime tower inside the printable area."));
+    }
+
+    Polygons excluded_areas = get_bed_excluded_area(print.config());
+    for (Polygon& excluded_area : excluded_areas)
+        excluded_area.translate(scale_(plate_origin.x()), scale_(plate_origin.y()));
+    if (!intersection(tower_polygons, excluded_areas).empty()) {
+        throw SlicingError(L("Smooth timelapse generated prime tower overlaps a bed exclusion area. Move the prime tower before slicing."));
+    }
+
+    const Point park_point = Point::new_scale(
+        print.config().esp32_timelapse_park_x.value + plate_origin.x(),
+        print.config().esp32_timelapse_park_y.value + plate_origin.y());
+    if (!printable_area.contains(park_point) ||
+        std::any_of(excluded_areas.begin(), excluded_areas.end(),
+                    [&park_point](const Polygon& area) { return area.contains(park_point); })) {
+        throw SlicingError(L("ESP32 Timelapse Box Smooth-mode park position must be inside the active plate and outside bed exclusion areas."));
+    }
+    if (tower_footprint.contains(park_point)) {
+        throw SlicingError(L("ESP32 Timelapse Box Smooth-mode park position overlaps the prime tower. Move the park position or prime tower before slicing."));
+    }
+
+    for (const PrintInstance* instance : sort_object_instances_by_model_order(print, true)) {
+        const Polygon model_footprint = print_instance_model_convex_hull(*instance);
+        if (!intersection(tower_polygons, Polygons { model_footprint }).empty()) {
+            throw SlicingError(L("Smooth timelapse generated prime tower overlaps the model. Move the prime tower before slicing."));
+        }
+        if (model_footprint.contains(park_point)) {
+            throw SlicingError(L("ESP32 Timelapse Box Smooth-mode park position overlaps the model. Move the park position before slicing."));
+        }
+    }
+}
+
 // Precondition: Print::validate() requires the Print::apply() to be called its invocation.
 //BBS: refine seq-print validation logic
 StringObjectException Print::validate(StringObjectException *warning, Polygons* collison_polygons, std::vector<std::pair<Polygon, float>>* height_polygons) const
@@ -1559,6 +1660,45 @@ StringObjectException Print::validate(StringObjectException *warning, Polygons* 
 
     if (extruders.empty())
         return { L("No extrusions under current settings.") };
+
+    if (print_config_uses_esp32_timelapse(m_config) &&
+        !gcode_has_executable_lines(m_config.esp32_timelapse_gcode.value)) {
+        return { L("ESP32 Timelapse Box is enabled by the printer profile, but no frame command is configured. Configure esp32_timelapse_gcode before slicing."), nullptr,
+                 "esp32_timelapse_gcode" };
+    }
+
+    if (print_config_uses_esp32_timelapse(m_config) &&
+        m_config.esp32_timelapse_dwell_ms.value < ESP32_TIMELAPSE_MIN_DWELL_MS) {
+        return { L("ESP32 Timelapse Box dwell must be at least 2000 ms so polling and camera exposure complete before printing resumes."), nullptr,
+                 "esp32_timelapse_dwell_ms" };
+    }
+
+    if (print_config_uses_esp32_timelapse(m_config) &&
+        m_config.timelapse_type.value == TimelapseType::tlSmooth &&
+        !print_config_has_valid_esp32_park_position(m_config)) {
+        return { L("ESP32 Timelapse Box Smooth mode requires an explicit park position inside the printable area and outside bed exclusion areas."), nullptr,
+                 "esp32_timelapse_park_x" };
+    }
+
+    if (print_config_uses_smooth_timelapse_tower(m_config) && m_config.spiral_mode.value) {
+        return { L("Smooth timelapse is not supported with spiral vase mode because it requires a prime tower."), nullptr,
+                 "spiral_mode" };
+    }
+
+    if (print_config_uses_smooth_timelapse_tower(m_config) &&
+        !smooth_timelapse_tower_fits_printable_area(*this)) {
+        return { L("Smooth timelapse requires the prime tower inside the printable area."), nullptr,
+                 "wipe_tower_x" };
+    }
+
+    if (nozzles < 2 && extruders.size() > 1 && m_config.print_sequence != PrintSequence::ByObject) {
+        auto ret = check_multi_filament_valid(*this);
+        if (!ret.string.empty())
+        {
+            ret.type = STRING_EXCEPT_FILAMENTS_DIFFERENT_TEMP;
+            return ret;
+        }
+    }
 
     if (m_config.print_sequence == PrintSequence::ByObject) {
         if (m_config.timelapse_type == TimelapseType::tlSmooth)
@@ -2556,6 +2696,7 @@ void Print::process(long long *time_cost_with_cache, bool use_cache)
         m_tool_ordering.clear();
         if (this->has_wipe_tower()) {
             this->_make_wipe_tower();
+            validate_generated_esp32_smooth_placement(*this);
         } else if (this->config().print_sequence != PrintSequence::ByObject) {
         	// Initialize the tool ordering, so it could be used by the G-code preview slider for planning tool changes and filament switches.
         	m_tool_ordering = ToolOrdering(*this, -1, false);
@@ -2976,9 +3117,20 @@ Points Print::first_layer_wipe_tower_corners(bool check_wipe_tower_existance) co
         // Now the stabilization cone.
         Vec2d center = (pts[0] + pts[2])/2.;
         const auto [cone_R, cone_x_scale] = WipeTower2::get_wipe_tower_cone_base(m_config.prime_tower_width, m_wipe_tower_data.height, m_wipe_tower_data.depth, m_config.wipe_tower_cone_angle);
-        double r = cone_R + m_wipe_tower_data.brim_width;
-        for (double alpha = 0.; alpha<2*M_PI; alpha += M_PI/20.)
-            pts.emplace_back(center + r*Vec2d(std::cos(alpha)/cone_x_scale, std::sin(alpha)));
+        if (cone_R > EPSILON && cone_x_scale > EPSILON) {
+            Polygon cone_base;
+            for (double alpha = 0.; alpha < 2 * M_PI; alpha += M_PI / 20.) {
+                cone_base.points.emplace_back(Point::new_scale(
+                    center + cone_R * Vec2d(std::cos(alpha) / cone_x_scale, std::sin(alpha))));
+            }
+
+            Polygons cone_footprint { cone_base };
+            if (m_wipe_tower_data.brim_width > EPSILON)
+                cone_footprint = offset(cone_base, scale_(m_wipe_tower_data.brim_width));
+            for (const Polygon& polygon : cone_footprint)
+                for (const Point& point : polygon.points)
+                    pts.emplace_back(unscale(point).cast<double>());
+        }
 
         for (Vec2d& pt : pts) {
             pt = Eigen::Rotation2Dd(Geometry::deg2rad(m_config.wipe_tower_rotation_angle.value)) * pt;
@@ -3087,10 +3239,24 @@ void Print::finalize_first_layer_convex_hull()
 bool Print::has_wipe_tower() const
 {
     if (m_config.enable_prime_tower.value == true) {
-        if (enable_timelapse_print())
+        if (uses_smooth_timelapse_tower())
             return true;
 
-        return !m_config.spiral_mode.value && m_config.filament_diameter.values.size() > 1;
+        const std::vector<unsigned int> object_extruders = this->object_extruders();
+        std::vector<unsigned int> used_extruders = object_extruders;
+        append(used_extruders, this->support_material_extruders());
+        const size_t num_physical = m_config.filament_diameter.size();
+        const CustomGCode::Info custom_gcode = this->model().get_curr_plate_custom_gcodes();
+        if (num_physical > 1 && object_extruders.size() == 1 && custom_gcode.mode == CustomGCode::MultiAsSingle) {
+            const size_t num_filaments = m_mixed_filament_mgr.total_filaments(num_physical);
+            for (const auto& [print_z, filament_id] : CustomGCode::custom_tool_changes(custom_gcode, num_filaments)) {
+                (void) print_z;
+                if (filament_id > 0)
+                    used_extruders.emplace_back(filament_id - 1);
+            }
+        }
+        sort_remove_duplicates(used_extruders);
+        return !m_config.spiral_mode.value && used_extruders.size() > 1;
     }
     return false;
 }
@@ -3117,8 +3283,12 @@ const WipeTowerData &Print::wipe_tower_data(size_t filaments_cnt) const
             const_cast<Print *>(this)->m_wipe_tower_data.depth = maximum / (layer_height * width);
         } else {
             double wipe_volume = m_config.prime_volume;
-            if (filaments_cnt == 1 && enable_timelapse_print()) {
-                const_cast<Print *>(this)->m_wipe_tower_data.depth = wipe_volume / (layer_height * width);
+            if (filaments_cnt == 1 && uses_smooth_timelapse_tower()) {
+                float tower_height = 0.f;
+                for (const PrintObject* object : m_objects)
+                    tower_height = std::max(tower_height, float(object->model_object()->bounding_box_exact().size().z()));
+                const_cast<Print *>(this)->m_wipe_tower_data.depth =
+                    std::max(wipe_volume / (layer_height * width), double(WipeTower::minimum_depth_for_height(tower_height)));
             } else {
                 const_cast<Print *>(this)->m_wipe_tower_data.depth = wipe_volume * (filaments_cnt - 1) / (layer_height * width);
             }
@@ -3129,9 +3299,9 @@ const WipeTowerData &Print::wipe_tower_data(size_t filaments_cnt) const
     return m_wipe_tower_data;
 }
 
-bool Print::enable_timelapse_print() const
+bool Print::uses_smooth_timelapse_tower() const
 {
-    return m_config.timelapse_type.value == TimelapseType::tlSmooth;
+    return print_config_uses_smooth_timelapse_tower(m_config);
 }
 
 void Print::_make_wipe_tower()
@@ -3258,7 +3428,7 @@ void Print::_make_wipe_tower()
                 layer_tools.wiping_extrusions().ensure_perimeters_infills_order(*this);
 
                 // if enable timelapse, slice all layer
-                if (enable_timelapse_print()) {
+                if (uses_smooth_timelapse_tower()) {
                     if (layer_tools.wipe_tower_partitions == 0)
                         wipe_tower.set_last_layer_extruder_fill(false);
                     continue;
@@ -3395,6 +3565,9 @@ void Print::_make_wipe_tower()
                 }
 
                 layer_tools.wiping_extrusions().ensure_perimeters_infills_order(*this);
+                if (uses_smooth_timelapse_tower())
+                    continue;
+
                 if (&layer_tools == &m_wipe_tower_data.tool_ordering.back() || (&layer_tools + 1)->wipe_tower_partitions == 0)
                     break;
             }

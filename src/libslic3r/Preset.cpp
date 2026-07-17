@@ -24,6 +24,8 @@
 
 #include <algorithm>
 #include <fstream>
+#include <iomanip>
+#include <sstream>
 #include <stdexcept>
 #include <unordered_map>
 #include <boost/format.hpp>
@@ -51,6 +53,21 @@
 using boost::property_tree::ptree;
 
 namespace Slic3r {
+
+std::string primary_nozzle_variant(const std::vector<double>& nozzle_diameters)
+{
+    if (nozzle_diameters.empty() || !std::isfinite(nozzle_diameters.front()) || nozzle_diameters.front() <= 0.)
+        return {};
+
+    std::ostringstream ss;
+    ss << std::fixed << std::setprecision(3) << nozzle_diameters.front();
+    std::string variant = ss.str();
+    while (!variant.empty() && variant.back() == '0')
+        variant.pop_back();
+    if (!variant.empty() && variant.back() == '.')
+        variant.pop_back();
+    return variant;
+}
 
 Semver get_min_version_from_json(std::string file_path)
 {
@@ -906,7 +923,10 @@ static std::vector<std::string> s_Preset_print_options {
      "tree_support_branch_diameter", "tree_support_branch_diameter_angle",
      "detect_narrow_internal_solid_infill",
      "gcode_add_line_number", "enable_arc_fitting", "precise_z_height", "infill_combination","infill_combination_max_layer_height",
-     "inner_wall_combination", "inner_wall_combination_max_layer_height", "mixed_nozzle_mode", "mixed_nozzle_auto_layer_height_ratio", "mixed_nozzle_layer_height_ratio", /*"adaptive_layer_height",*/
+     "inner_wall_combination", "inner_wall_combination_max_layer_height", "mixed_nozzle_mode",
+     "mixed_nozzle_sparse_infill_combination", "mixed_nozzle_inner_wall_combination", "mixed_nozzle_internal_solid_infill_combination",
+     "mixed_nozzle_auto_coarse_layer_height", "mixed_nozzle_coarse_layer_height",
+     "mixed_nozzle_auto_layer_height_ratio", "mixed_nozzle_layer_height_ratio", /*"adaptive_layer_height",*/
      "support_bottom_interface_spacing", "enable_overhang_speed", "slowdown_for_curled_perimeters", "overhang_1_4_speed", "overhang_2_4_speed", "overhang_3_4_speed", "overhang_4_4_speed",
      "initial_layer_infill_speed", "only_one_wall_top", 
      "timelapse_type",
@@ -986,6 +1006,9 @@ static std::vector<std::string> s_Preset_machine_limits_options {
 static std::vector<std::string> s_Preset_printer_options {
     "printer_technology",
     "printable_area", "bed_exclude_area","bed_custom_texture", "bed_custom_model", "gcode_flavor",
+    "supports_esp32_timelapse", "esp32_timelapse_gcode",
+    "esp32_timelapse_park_x", "esp32_timelapse_park_y",
+    "esp32_timelapse_travel_speed", "esp32_timelapse_dwell_ms",
     "fan_kickstart", "fan_speedup_time", "fan_speedup_overhangs",
     "single_extruder_multi_material", "manual_filament_change", "machine_start_gcode", "machine_end_gcode", "before_layer_change_gcode", "printing_by_object_gcode", "layer_change_gcode", "time_lapse_gcode", "change_filament_gcode", "change_extrusion_role_gcode",
     "printer_model", "printer_variant", "printable_height", "extruder_clearance_radius", "extruder_clearance_height_to_lid", "extruder_clearance_height_to_rod",

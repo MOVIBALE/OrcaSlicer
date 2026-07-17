@@ -3007,10 +3007,8 @@ int CLI::run(int argc, char **argv)
         flush_and_exit(CLI_INVALID_VALUES_IN_3MF);
     }
 
-    auto timelapse_type_opt = m_print_config.option("timelapse_type");
-    bool is_smooth_timelapse = false;
-    if (enable_timelapse && timelapse_type_opt && (timelapse_type_opt->getInt() == TimelapseType::tlSmooth))
-        is_smooth_timelapse = true;
+    const bool is_smooth_timelapse =
+        enable_timelapse && dynamic_print_config_uses_smooth_timelapse_tower(m_print_config);
     if (disable_wipe_tower_after_mapping) {
         if (is_smooth_timelapse)
         {

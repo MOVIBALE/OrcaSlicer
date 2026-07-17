@@ -306,8 +306,8 @@ void ConfigManipulation::update_print_fff_config(DynamicPrintConfig* config, con
            config->opt_int("enforce_support_layers") == 0 &&
            ! config->opt_bool("detect_thin_wall") &&
            ! config->opt_bool("overhang_reverse") &&
-            config->opt_enum<WallDirection>("wall_direction") == WallDirection::Auto &&
-            config->opt_enum<TimelapseType>("timelapse_type") == TimelapseType::tlTraditional))
+             config->opt_enum<WallDirection>("wall_direction") == WallDirection::Auto &&
+             timelapse_type_compatible_with_spiral_vase(timelapse_type)))
     {
         DynamicPrintConfig new_conf = *config;
         auto answer = show_spiral_mode_settings_dialog(is_object_config);
@@ -321,9 +321,9 @@ void ConfigManipulation::update_print_fff_config(DynamicPrintConfig* config, con
             new_conf.set_key_value("detect_thin_wall", new ConfigOptionBool(false));
             new_conf.set_key_value("overhang_reverse", new ConfigOptionBool(false));
             new_conf.set_key_value("wall_direction", new ConfigOptionEnum<WallDirection>(WallDirection::Auto));
-            new_conf.set_key_value("timelapse_type", new ConfigOptionEnum<TimelapseType>(tlTraditional));
+            normalize_timelapse_for_spiral_vase(new_conf);
             sparse_infill_density = 0;
-            timelapse_type = TimelapseType::tlTraditional;
+            timelapse_type = new_conf.opt_enum<TimelapseType>("timelapse_type");
             support = false;
         }
         else {
@@ -553,6 +553,12 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, co
     bool have_perimeters = config->opt_int("wall_loops") > 0;
     const auto *mixed_nozzle_mode = config->option<ConfigOptionEnum<MixedNozzleMode>>("mixed_nozzle_mode");
     const bool mixed_nozzle_mixed_layer = mixed_nozzle_mode != nullptr && mixed_nozzle_mode->value == MixedNozzleMode::MixedLayer;
+    const auto *mixed_nozzle_auto_coarse_height = config->option<ConfigOptionBool>("mixed_nozzle_auto_coarse_layer_height");
+    const bool mixed_nozzle_auto_coarse_layer_height = mixed_nozzle_auto_coarse_height == nullptr || mixed_nozzle_auto_coarse_height->value;
+    const auto *mixed_nozzle_coarse_height = config->option<ConfigOptionFloat>("mixed_nozzle_coarse_layer_height");
+    const bool mixed_nozzle_legacy_ratio = !mixed_nozzle_auto_coarse_layer_height &&
+                                           mixed_nozzle_coarse_height != nullptr &&
+                                           mixed_nozzle_coarse_height->value <= 0.;
     const auto *mixed_nozzle_auto_ratio = config->option<ConfigOptionBool>("mixed_nozzle_auto_layer_height_ratio");
     const bool mixed_nozzle_auto_layer_height_ratio = mixed_nozzle_auto_ratio == nullptr || mixed_nozzle_auto_ratio->value;
     for (auto el : { "extra_perimeters_on_overhangs", "ensure_vertical_shell_thickness", "detect_thin_wall", "detect_overhang_wall",
@@ -561,9 +567,14 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, co
         "inner_wall_combination" })
         toggle_field(el, have_perimeters);
     if (mixed_nozzle_mode != nullptr) {
+        toggle_line("mixed_nozzle_sparse_infill_combination", mixed_nozzle_mixed_layer);
+        toggle_line("mixed_nozzle_inner_wall_combination", mixed_nozzle_mixed_layer);
+        toggle_line("mixed_nozzle_internal_solid_infill_combination", mixed_nozzle_mixed_layer);
+        toggle_line("mixed_nozzle_auto_coarse_layer_height", mixed_nozzle_mixed_layer);
+        toggle_line("mixed_nozzle_coarse_layer_height", mixed_nozzle_mixed_layer && !mixed_nozzle_auto_coarse_layer_height);
         if (mixed_nozzle_auto_ratio != nullptr)
-            toggle_line("mixed_nozzle_auto_layer_height_ratio", mixed_nozzle_mixed_layer);
-        toggle_line("mixed_nozzle_layer_height_ratio", mixed_nozzle_mixed_layer && !mixed_nozzle_auto_layer_height_ratio);
+            toggle_line("mixed_nozzle_auto_layer_height_ratio", mixed_nozzle_mixed_layer && mixed_nozzle_legacy_ratio);
+        toggle_line("mixed_nozzle_layer_height_ratio", mixed_nozzle_mixed_layer && mixed_nozzle_legacy_ratio && !mixed_nozzle_auto_layer_height_ratio);
     }
     toggle_line("inner_wall_combination_max_layer_height", have_perimeters && config->opt_bool("inner_wall_combination") && !mixed_nozzle_mixed_layer);
 
@@ -862,8 +873,11 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, co
         apply(config, &new_conf);
     }
     toggle_line("overhang_reverse_threshold", has_detect_overhang_wall && allow_overhang_reverse && has_overhang_reverse && !has_overhang_reverse_internal_only);
-    toggle_line("timelapse_type", is_BBL_Printer);
-
+    const DynamicPrintConfig& printer_config = wxGetApp().preset_bundle->printers.get_edited_preset().config;
+    const bool supports_esp32_timelapse =
+        dynamic_print_config_supports_esp32_timelapse(printer_config) ||
+        dynamic_print_config_supports_esp32_timelapse(*config);
+    toggle_line("timelapse_type", is_BBL_Printer || supports_esp32_timelapse);
 
     bool have_small_area_infill_flow_compensation = config->opt_bool("small_area_infill_flow_compensation");
     toggle_line("small_area_infill_flow_compensation_model", have_small_area_infill_flow_compensation);

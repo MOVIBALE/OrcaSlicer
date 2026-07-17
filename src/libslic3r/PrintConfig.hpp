@@ -26,6 +26,7 @@
 #include <boost/preprocessor/stringize.hpp>
 #include <boost/preprocessor/tuple/elem.hpp>
 #include <boost/preprocessor/tuple/to_seq.hpp>
+#include <string_view>
 
 namespace Slic3r {
 
@@ -254,7 +255,8 @@ enum BrimType {
 
 enum TimelapseType : int {
     tlTraditional = 0,
-    tlSmooth
+    tlSmooth,
+    tlOff
 };
 
 enum SkirtType {
@@ -1034,6 +1036,11 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionBool, inner_wall_combination))
     ((ConfigOptionFloatOrPercent,                inner_wall_combination_max_layer_height))
     ((ConfigOptionEnum<MixedNozzleMode>, mixed_nozzle_mode))
+    ((ConfigOptionBool, mixed_nozzle_sparse_infill_combination))
+    ((ConfigOptionBool, mixed_nozzle_inner_wall_combination))
+    ((ConfigOptionBool, mixed_nozzle_internal_solid_infill_combination))
+    ((ConfigOptionBool, mixed_nozzle_auto_coarse_layer_height))
+    ((ConfigOptionFloat, mixed_nozzle_coarse_layer_height))
     ((ConfigOptionBool, mixed_nozzle_auto_layer_height_ratio))
     ((ConfigOptionInt, mixed_nozzle_layer_height_ratio))
     ((ConfigOptionInt,                  fill_multiline))
@@ -1207,6 +1214,12 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionFloat,               time_cost)) 
     ((ConfigOptionString,              layer_change_gcode))
     ((ConfigOptionString,              time_lapse_gcode))
+    ((ConfigOptionBool,                supports_esp32_timelapse))
+    ((ConfigOptionString,              esp32_timelapse_gcode))
+    ((ConfigOptionFloat,               esp32_timelapse_park_x))
+    ((ConfigOptionFloat,               esp32_timelapse_park_y))
+    ((ConfigOptionFloat,               esp32_timelapse_travel_speed))
+    ((ConfigOptionInt,                 esp32_timelapse_dwell_ms))
 
     ((ConfigOptionFloat,               max_volumetric_extrusion_rate_slope))
     ((ConfigOptionFloat,               max_volumetric_extrusion_rate_slope_segment_length))
@@ -1862,6 +1875,99 @@ Slic3r::Polygons get_bed_excluded_area(const PrintConfig& cfg);
 Slic3r::Polygon get_bed_shape_with_excluded_area(const PrintConfig& cfg);
 bool has_skirt(const DynamicPrintConfig& cfg);
 float get_real_skirt_dist(const DynamicPrintConfig& cfg);
+
+inline constexpr int ESP32_TIMELAPSE_MIN_DWELL_MS = 2000;
+
+// A configured frame hook must contain at least one non-comment command.
+bool gcode_has_executable_lines(std::string_view gcode);
+
+inline bool print_config_supports_esp32_timelapse(const PrintConfig& config)
+{
+    return config.gcode_flavor.value == gcfKlipper && config.supports_esp32_timelapse.value;
+}
+
+inline bool print_config_uses_esp32_timelapse(const PrintConfig& config)
+{
+    return print_config_supports_esp32_timelapse(config) &&
+           config.timelapse_type.value != TimelapseType::tlOff;
+}
+
+inline bool print_config_uses_native_timelapse(const PrintConfig& config)
+{
+    return config.timelapse_type.value != TimelapseType::tlOff;
+}
+
+bool print_config_has_valid_esp32_park_position(const PrintConfig& config);
+
+inline bool print_config_uses_legacy_smooth_timelapse(const PrintConfig& config)
+{
+    return config.timelapse_type.value == TimelapseType::tlSmooth;
+}
+
+// Native and additive ESP32 capture share the same Smooth-mode tower.
+inline bool print_config_uses_smooth_timelapse_tower(const PrintConfig& config)
+{
+    return config.timelapse_type.value == TimelapseType::tlSmooth;
+}
+
+inline int timelapse_type_to_plate_metadata(TimelapseType type)
+{
+    return type == TimelapseType::tlOff ? -1 : int(type);
+}
+
+inline bool timelapse_type_compatible_with_spiral_vase(TimelapseType type)
+{
+    return type != TimelapseType::tlSmooth;
+}
+
+inline bool normalize_timelapse_for_spiral_vase(DynamicPrintConfig& config)
+{
+    auto* timelapse = config.option<ConfigOptionEnum<TimelapseType>>("timelapse_type");
+    if (timelapse == nullptr || timelapse_type_compatible_with_spiral_vase(timelapse->value))
+        return false;
+
+    timelapse->value = TimelapseType::tlTraditional;
+    return true;
+}
+
+inline bool dynamic_print_config_supports_esp32_timelapse(const DynamicPrintConfig& config)
+{
+    return config.has("gcode_flavor") &&
+           config.has("supports_esp32_timelapse") &&
+           config.opt_enum<GCodeFlavor>("gcode_flavor") == gcfKlipper &&
+           config.opt_bool("supports_esp32_timelapse");
+}
+
+inline bool dynamic_print_config_uses_legacy_smooth_timelapse(
+    const DynamicPrintConfig& process_config,
+    const DynamicPrintConfig& /*printer_config*/)
+{
+    const auto* timelapse_type = process_config.option<ConfigOptionEnum<TimelapseType>>("timelapse_type");
+    return timelapse_type != nullptr && timelapse_type->value == TimelapseType::tlSmooth;
+}
+
+inline bool dynamic_print_config_uses_legacy_smooth_timelapse(const DynamicPrintConfig& merged_config)
+{
+    return dynamic_print_config_uses_legacy_smooth_timelapse(merged_config, merged_config);
+}
+
+inline bool dynamic_print_config_uses_smooth_timelapse_tower(
+    const DynamicPrintConfig& process_config,
+    const DynamicPrintConfig& printer_config)
+{
+    const auto* timelapse_type = process_config.option<ConfigOptionEnum<TimelapseType>>("timelapse_type");
+    return timelapse_type != nullptr && timelapse_type->value == TimelapseType::tlSmooth;
+}
+
+inline bool dynamic_print_config_uses_smooth_timelapse_tower(const DynamicPrintConfig& merged_config)
+{
+    return dynamic_print_config_uses_smooth_timelapse_tower(merged_config, merged_config);
+}
+
+inline bool should_reserve_wipe_tower(bool enabled, bool smooth_timelapse_tower, size_t used_tools)
+{
+    return enabled && (smooth_timelapse_tower || used_tools > 1);
+}
 
 // ModelConfig is a wrapper around DynamicPrintConfig with an addition of a timestamp.
 // Each change of ModelConfig is tracked by assigning a new timestamp from a global counter.

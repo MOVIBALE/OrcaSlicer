@@ -98,7 +98,7 @@ public:
         m_local_z_reserve_slot_idx(local_z_reserve_boxes.size(), 0),
         m_plate_origin(plate_origin),
         m_single_extruder_multi_material(print_config.single_extruder_multi_material),
-        m_enable_timelapse_print(print_config.timelapse_type.value == TimelapseType::tlSmooth),
+        m_enable_timelapse_print(print_config_uses_legacy_smooth_timelapse(print_config)),
         m_is_first_print(true)
     {}
 
@@ -245,7 +245,7 @@ public:
     void            set_layer_count(unsigned int value) { m_layer_count = value; }
     void            apply_print_config(const PrintConfig &print_config);
 
-    std::string     travel_to(const Point& point, ExtrusionRole role, std::string comment, double z = DBL_MAX);
+    std::string     travel_to(const Point& point, ExtrusionRole role, std::string comment, double z = DBL_MAX, double travel_speed = 0.0);
     bool            needs_retraction(const Polyline& travel, ExtrusionRole role, LiftType& lift_type);
     std::string     retract(bool toolchange = false, bool is_last_retraction = false, LiftType lift_type = LiftType::NormalLift, ExtrusionRole role = erNone);
     std::string     unretract() { return m_writer.unlift() + m_writer.unretract(); }
@@ -353,6 +353,7 @@ private:
         const size_t                     single_object_idx = size_t(-1),
         // BBS
         const bool                       prime_extruder = false);
+    std::string esp32_timelapse_gcode(const Print& print, double layer_height, int layer_index);
     // Process all layers of all objects (non-sequential mode) with a parallel pipeline:
     // Generate G-code, run the filters (vase mode, cooling buffer), run the G-code analyser
     // and export G-code into file.
@@ -609,6 +610,8 @@ private:
 
     int m_timelapse_warning_code = 0;
     bool m_support_traditional_timelapse = true;
+    int m_deferred_esp32_layer_index = -1;
+    double m_deferred_esp32_layer_height = 0.0;
 
     bool m_silent_time_estimator_enabled;
 

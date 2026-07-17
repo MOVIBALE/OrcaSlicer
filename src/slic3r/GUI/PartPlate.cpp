@@ -1716,44 +1716,11 @@ Vec3d PartPlate::estimate_wipe_tower_size(const DynamicPrintConfig & config, con
 	wipe_tower_size(2) = max_height;
 
 	//const DynamicPrintConfig &dconfig = wxGetApp().preset_bundle->prints.get_edited_preset().config;
-    auto timelapse_type    = config.option<ConfigOptionEnum<TimelapseType>>("timelapse_type");
-    bool timelapse_enabled = timelapse_type ? (timelapse_type->value == TimelapseType::tlSmooth) : false;
+    const bool timelapse_enabled = dynamic_print_config_uses_smooth_timelapse_tower(config);
 
     double depth = plate_extruder_size == 1 ? 0 : d;
-    if (timelapse_enabled || depth > EPSILON) {
-		float min_wipe_tower_depth = 0.f;
-		auto iter = WipeTower::min_depth_per_height.begin();
-		while (iter != WipeTower::min_depth_per_height.end()) {
-			auto curr_height_to_depth = *iter;
-
-			// This is the case that wipe tower height is lower than the first min_depth_to_height member.
-			if (curr_height_to_depth.first >= max_height) {
-				min_wipe_tower_depth = curr_height_to_depth.second;
-				break;
-			}
-
-			iter++;
-
-			// If curr_height_to_depth is the last member, use its min_depth.
-			if (iter == WipeTower::min_depth_per_height.end()) {
-				min_wipe_tower_depth = curr_height_to_depth.second;
-				break;
-			}
-
-			// If wipe tower height is between the current and next member, set the min_depth as linear interpolation between them
-			auto next_height_to_depth = *iter;
-			if (next_height_to_depth.first > max_height) {
-				float height_base = curr_height_to_depth.first;
-				float height_diff = next_height_to_depth.first - curr_height_to_depth.first;
-				float min_depth_base = curr_height_to_depth.second;
-				float depth_diff = next_height_to_depth.second - curr_height_to_depth.second;
-
-				min_wipe_tower_depth = min_depth_base + (max_height - curr_height_to_depth.first) / height_diff * depth_diff;
-				break;
-			}
-		}
-		depth = std::max((double)min_wipe_tower_depth, depth);
-	}
+    if (timelapse_enabled || depth > EPSILON)
+		depth = std::max(double(WipeTower::minimum_depth_for_height(max_height)), depth);
 	wipe_tower_size(1) = depth;
 	return wipe_tower_size;
 }
@@ -2433,7 +2400,9 @@ void PartPlate::set_vase_mode_related_object_config(int obj_id) {
 	new_conf.set_key_value("enable_support", new ConfigOptionBool(false));
 	new_conf.set_key_value("enforce_support_layers", new ConfigOptionInt(0));
 	new_conf.set_key_value("detect_thin_wall", new ConfigOptionBool(false));
-	new_conf.set_key_value("timelapse_type", new ConfigOptionEnum<TimelapseType>(tlTraditional));
+	new_conf.set_key_value("timelapse_type", new ConfigOptionEnum<TimelapseType>(
+		global_config->opt_enum<TimelapseType>("timelapse_type")));
+	normalize_timelapse_for_spiral_vase(new_conf);
 	new_conf.set_key_value("overhang_reverse", new ConfigOptionBool(false));
 	new_conf.set_key_value("wall_direction", new ConfigOptionEnum<WallDirection>(WallDirection::Auto));
 	auto applying_keys = global_config->diff(new_conf);
@@ -4397,7 +4366,8 @@ int PartPlateList::notify_instance_update(int obj_id, int instance_id, bool is_n
 			config.has("enforce_support_layers") && config.opt_int("enforce_support_layers") == 0 &&
 			config.has("ensure_vertical_shell_thickness") && config.opt_bool("ensure_vertical_shell_thickness") &&
 			config.has("detect_thin_wall") && !config.opt_bool("detect_thin_wall") &&
-			config.has("timelapse_type") && config.opt_enum<TimelapseType>("timelapse_type") == TimelapseType::tlTraditional)
+			config.has("timelapse_type") &&
+			timelapse_type_compatible_with_spiral_vase(config.opt_enum<TimelapseType>("timelapse_type")))
 			return true;
 		else
 			return false;

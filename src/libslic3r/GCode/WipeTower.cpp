@@ -603,6 +603,30 @@ const std::map<float, float> WipeTower::min_depth_per_height = {
     {100.f, 20.f}, {250.f, 40.f}
 };
 
+float WipeTower::minimum_depth_for_height(float tower_height)
+{
+    auto current = min_depth_per_height.begin();
+    if (current == min_depth_per_height.end())
+        return 0.f;
+
+    while (current != min_depth_per_height.end()) {
+        const auto [current_height, current_depth] = *current;
+        if (current_height >= tower_height)
+            return current_depth;
+
+        const auto next = std::next(current);
+        if (next == min_depth_per_height.end())
+            return current_depth;
+        if (next->first > tower_height) {
+            const float ratio = (tower_height - current_height) / (next->first - current_height);
+            return current_depth + ratio * (next->second - current_depth);
+        }
+        current = next;
+    }
+
+    return min_depth_per_height.rbegin()->second;
+}
+
 WipeTower::WipeTower(const PrintConfig& config, int plate_idx, Vec3d plate_origin, const float prime_volume, size_t initial_tool, const float wipe_tower_height) :
     m_semm(config.single_extruder_multi_material.value),
     m_wipe_tower_pos(config.wipe_tower_x.get_at(plate_idx), config.wipe_tower_y.get_at(plate_idx)),
@@ -621,7 +645,7 @@ WipeTower::WipeTower(const PrintConfig& config, int plate_idx, Vec3d plate_origi
     m_current_tool(initial_tool),
     //wipe_volumes(flush_matrix)
     m_wipe_volume(prime_volume),
-    m_enable_timelapse_print(config.timelapse_type.value == TimelapseType::tlSmooth)
+    m_enable_smooth_timelapse_tower(print_config_uses_smooth_timelapse_tower(config))
 {
     // Read absolute value of first layer speed, if given as percentage,
     // it is taken over following default. Speeds from config are not
@@ -1420,40 +1444,10 @@ void WipeTower::plan_tower()
     for (auto& info : m_plan)
         max_depth = std::max(max_depth, info.toolchanges_depth());
 
-    float min_wipe_tower_depth = 0.f;
-    auto iter = WipeTower::min_depth_per_height.begin();
-    while (iter != WipeTower::min_depth_per_height.end()) {
-        auto curr_height_to_depth = *iter;
-
-        // This is the case that wipe tower height is lower than the first min_depth_to_height member.
-        if (curr_height_to_depth.first >= m_wipe_tower_height) {
-            min_wipe_tower_depth = curr_height_to_depth.second;
-            break;
-        }
-
-        iter++;
-
-        // If curr_height_to_depth is the last member, use its min_depth.
-        if (iter == WipeTower::min_depth_per_height.end()) {
-            min_wipe_tower_depth = curr_height_to_depth.second;
-            break;
-        }
-
-        // If wipe tower height is between the current and next member, set the min_depth as linear interpolation between them
-        auto next_height_to_depth = *iter;
-        if (next_height_to_depth.first > m_wipe_tower_height) {
-            float height_base = curr_height_to_depth.first;
-            float height_diff = next_height_to_depth.first - curr_height_to_depth.first;
-            float min_depth_base = curr_height_to_depth.second;
-            float depth_diff = next_height_to_depth.second - curr_height_to_depth.second;
-
-            min_wipe_tower_depth = min_depth_base + (m_wipe_tower_height - curr_height_to_depth.first) / height_diff * depth_diff;
-            break;
-        }
-    }
+    const float min_wipe_tower_depth = minimum_depth_for_height(m_wipe_tower_height);
 
     {
-        if (m_enable_timelapse_print && max_depth < EPSILON)
+        if (m_enable_smooth_timelapse_tower && max_depth < EPSILON)
             max_depth = min_wipe_tower_depth;
 
         if (max_depth + EPSILON < min_wipe_tower_depth)
@@ -1498,7 +1492,7 @@ void WipeTower::plan_tower()
     for (int layer_index = int(m_plan.size()) - 1; layer_index >= 0; --layer_index)
 	{
 		float this_layer_depth = std::max(m_plan[layer_index].depth, m_plan[layer_index].toolchanges_depth());
-        if (m_enable_timelapse_print && this_layer_depth < EPSILON)
+        if (m_enable_smooth_timelapse_tower && this_layer_depth < EPSILON)
             this_layer_depth = min_wipe_tower_depth;
 
 		m_plan[layer_index].depth = this_layer_depth;
@@ -1512,11 +1506,11 @@ void WipeTower::plan_tower()
 				m_plan[i].depth = this_layer_depth;
 		}
 
-        if (m_enable_timelapse_print && layer_index == 0)
+        if (m_enable_smooth_timelapse_tower && layer_index == 0)
             max_depth_for_all = m_plan[0].depth;
     }
 
-    if (m_enable_timelapse_print) {
+    if (m_enable_smooth_timelapse_tower) {
         for (int i = int(m_plan.size()) - 1; i >= 0; i--) {
             m_plan[i].depth = max_depth_for_all;
         }
@@ -1648,19 +1642,19 @@ void WipeTower::generate(std::vector<std::vector<WipeTower::ToolChangeResult>> &
             // if there is no toolchange switching to non-soluble, finish layer
             // will be called at the very beginning. That's the last possibility
             // where a nonsoluble tool can be.
-            if (m_enable_timelapse_print) {
+            if (m_enable_smooth_timelapse_tower) {
                 timelapse_wall = only_generate_out_wall();
             }
-            finish_layer_tcr = finish_layer(m_enable_timelapse_print ? false : true, layer.extruder_fill);
+            finish_layer_tcr = finish_layer(m_enable_smooth_timelapse_tower ? false : true, layer.extruder_fill);
         }
 
         for (int i=0; i<int(layer.tool_changes.size()); ++i) {
-            if (i == 0 && m_enable_timelapse_print) {
+            if (i == 0 && m_enable_smooth_timelapse_tower) {
                 timelapse_wall = only_generate_out_wall();
             }
 
             if (i == idx) {
-                layer_result.emplace_back(tool_change(layer.tool_changes[i].new_tool, m_enable_timelapse_print ? false : true));
+                layer_result.emplace_back(tool_change(layer.tool_changes[i].new_tool, m_enable_smooth_timelapse_tower ? false : true));
                 // finish_layer will be called after this toolchange
                 finish_layer_tcr = finish_layer(false, layer.extruder_fill);
             }
@@ -1684,7 +1678,7 @@ void WipeTower::generate(std::vector<std::vector<WipeTower::ToolChangeResult>> &
                 layer_result[idx] = merge_tcr(layer_result[idx], finish_layer_tcr);
         }
 
-        if (m_enable_timelapse_print) {
+        if (m_enable_smooth_timelapse_tower) {
             layer_result.insert(layer_result.begin(), std::move(timelapse_wall));
         }
 

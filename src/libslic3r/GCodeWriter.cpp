@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <assert.h>
 #include <GCode/GCodeProcessor.hpp>
@@ -487,7 +488,7 @@ std::string GCodeWriter::set_speed(double F, const std::string &comment, const s
     return w.string();
 }
 
-std::string GCodeWriter::travel_to_xy(const Vec2d &point, const std::string &comment)
+std::string GCodeWriter::travel_to_xy(const Vec2d &point, const std::string &comment, double travel_speed)
 {
     m_pos(0) = point(0);
     m_pos(1) = point(1);
@@ -498,15 +499,15 @@ std::string GCodeWriter::travel_to_xy(const Vec2d &point, const std::string &com
     
     GCodeG1Formatter w;
     w.emit_xy(point_on_plate);
-    auto speed = m_is_first_layer
-        ? this->config.get_abs_value("initial_layer_travel_speed") : this->config.travel_speed.value;
+    const double speed = travel_speed > 0.0 ? travel_speed :
+        (m_is_first_layer ? this->config.get_abs_value("initial_layer_travel_speed") : this->config.travel_speed.value);
     w.emit_f(speed * 60.0);
     //BBS
     w.emit_comment(GCodeWriter::full_gcode_comment, comment);
     return w.string();
 }
 
-std::string GCodeWriter::travel_to_xyz(const Vec3d &point, const std::string &comment, bool force_z)
+std::string GCodeWriter::travel_to_xyz(const Vec3d &point, const std::string &comment, bool force_z, double travel_speed)
 {
     // FIXME: This function was not being used when travel_speed_z was separated (bd6badf).
     // Calculation of feedrate was not updated accordingly. If you want to use
@@ -519,8 +520,19 @@ std::string GCodeWriter::travel_to_xyz(const Vec3d &point, const std::string &co
         used for unlift. */
         // BBS
     Vec3d dest_point = point;
-    auto travel_speed =
-        m_is_first_layer ? this->config.get_abs_value("initial_layer_travel_speed") : this->config.travel_speed.value;
+    travel_speed = travel_speed > 0.0 ? travel_speed :
+        (m_is_first_layer ? this->config.get_abs_value("initial_layer_travel_speed") : this->config.travel_speed.value);
+    if (m_force_lift_until_unlift && m_lifted > EPSILON && !force_z) {
+        if (point.z() <= m_pos.z() + EPSILON) {
+            m_lifted = std::max(0.0, m_pos.z() - point.z());
+            return this->travel_to_xy(to_2d(point), comment, travel_speed);
+        }
+
+        m_lifted = 0.0;
+        m_force_lift_until_unlift = false;
+        return this->_travel_to_z(point.z(), comment) + this->travel_to_xy(to_2d(point), comment, travel_speed);
+    }
+
     //BBS: a z_hop need to be handle when travel
     if (std::abs(m_to_lift) > EPSILON) {
         assert(std::abs(m_lifted) < EPSILON);
@@ -601,12 +613,13 @@ std::string GCodeWriter::travel_to_xyz(const Vec3d &point, const std::string &co
             m_lifted = 0.;
         //BBS
         this->set_current_position_clear(true);
-        return this->travel_to_xy(to_2d(point));
+        return this->travel_to_xy(to_2d(point), comment, travel_speed);
     }
     else {
         /*  In all the other cases, we perform an actual XYZ move and cancel
             the lift. */
         m_lifted = 0;
+        m_force_lift_until_unlift = false;
     }
     
     //BBS: take plate offset into consider
@@ -617,13 +630,13 @@ std::string GCodeWriter::travel_to_xyz(const Vec3d &point, const std::string &co
     {
         //force to move xy first then z after filament change
         w.emit_xy(Vec2d(point_on_plate.x(), point_on_plate.y()));
-        w.emit_f(this->config.travel_speed.value * 60.0);
+        w.emit_f(travel_speed * 60.0);
         w.emit_comment(GCodeWriter::full_gcode_comment, comment);
         out_string = w.string() + _travel_to_z(point_on_plate.z(), comment);
     } else {
         GCodeG1Formatter w;
         w.emit_xyz(point_on_plate);
-        w.emit_f(this->config.travel_speed.value * 60.0);
+        w.emit_f(travel_speed * 60.0);
         w.emit_comment(GCodeWriter::full_gcode_comment, comment);
         out_string = w.string();
     }
@@ -649,6 +662,7 @@ std::string GCodeWriter::travel_to_z(double z, const std::string &comment, bool 
     /*  In all the other cases, we perform an actual Z move and cancel
         the lift. */
     m_lifted = 0;
+    m_force_lift_until_unlift = false;
     return this->_travel_to_z(z, comment);
 }
 
@@ -876,6 +890,43 @@ std::string GCodeWriter::lift(LiftType lift_type, bool spiral_vase)
     return "";
 }
 
+std::string GCodeWriter::force_lift(double minimum_lift, const std::string &comment)
+{
+    return this->force_lift(minimum_lift, std::numeric_limits<double>::infinity(), comment);
+}
+
+std::string GCodeWriter::force_lift(double minimum_lift, double maximum_z, const std::string &comment)
+{
+    const double nominal_z = m_pos(2) - m_lifted;
+    const double maximum_lift = std::max(0.0, maximum_z - nominal_z);
+    const double target_lift = std::min(std::max({m_lifted, m_to_lift, minimum_lift}), maximum_lift);
+    m_to_lift = 0.0;
+    m_force_lift_until_unlift = true;
+    if (target_lift <= m_lifted + EPSILON)
+        return "";
+
+    m_lifted = target_lift;
+    return this->_travel_to_z(nominal_z + target_lift, comment);
+}
+
+bool GCodeWriter::update_nominal_z(double nominal_z)
+{
+    if (!m_force_lift_until_unlift) {
+        m_pos(2) = nominal_z;
+        return false;
+    }
+
+    if (m_force_lift_until_unlift && m_pos(2) > nominal_z + EPSILON) {
+        m_lifted = m_pos(2) - nominal_z;
+        return true;
+    }
+
+    m_pos(2) = nominal_z;
+    m_lifted = 0.0;
+    m_force_lift_until_unlift = false;
+    return false;
+}
+
 std::string GCodeWriter::unlift()
 {
     std::string gcode;
@@ -884,6 +935,7 @@ std::string GCodeWriter::unlift()
         m_lifted = 0;
     }
     m_to_lift = 0.;
+    m_force_lift_until_unlift = false;
     return gcode;
 }
 

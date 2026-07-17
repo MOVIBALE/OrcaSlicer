@@ -1302,6 +1302,7 @@ WipeTower2::WipeTower2(const PrintConfig&                     config,
                        size_t                                 initial_tool)
     : m_semm(config.single_extruder_multi_material.value)
     , m_enable_filament_ramming(config.enable_filament_ramming.value)
+    , m_enable_smooth_timelapse_tower(print_config_uses_smooth_timelapse_tower(config))
     , m_wipe_tower_pos(config.wipe_tower_x.get_at(plate_idx), config.wipe_tower_y.get_at(plate_idx))
     , m_wipe_tower_width(float(config.prime_tower_width))
     , m_wipe_tower_rotation_angle(float(config.wipe_tower_rotation_angle))
@@ -2560,9 +2561,12 @@ void WipeTower2::plan_tower()
         layer.depth = 0.f;
     m_wipe_tower_height = m_plan.empty() ? 0.f : m_plan.back().z;
     m_current_height    = 0.f;
+    const float smooth_timelapse_depth = m_enable_smooth_timelapse_tower ?
+                                             WipeTower::minimum_depth_for_height(m_wipe_tower_height) :
+                                             0.f;
 
     for (int layer_index = int(m_plan.size()) - 1; layer_index >= 0; --layer_index) {
-        float this_layer_depth    = std::max(m_plan[layer_index].depth, m_plan[layer_index].planned_depth());
+        float this_layer_depth    = std::max({m_plan[layer_index].depth, m_plan[layer_index].planned_depth(), smooth_timelapse_depth});
         m_plan[layer_index].depth = this_layer_depth;
 
         if (this_layer_depth > m_wipe_tower_depth - m_perimeter_width)

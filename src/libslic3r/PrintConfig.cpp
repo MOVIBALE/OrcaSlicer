@@ -5,6 +5,9 @@
 #include "format.hpp"
 
 #include "GCode/Thumbnails.hpp"
+#include <algorithm>
+#include <cctype>
+#include <cmath>
 #include <set>
 #include <boost/algorithm/string/replace.hpp>
 #include <boost/algorithm/string/case_conv.hpp>
@@ -52,6 +55,24 @@ namespace Slic3r {
 //! return same string
 #define L(s) (s)
 #define _(s) Slic3r::I18N::translate(s)
+
+bool gcode_has_executable_lines(std::string_view gcode)
+{
+    size_t begin = 0;
+    while (begin <= gcode.size()) {
+        const size_t end = gcode.find('\n', begin);
+        std::string_view line = gcode.substr(
+            begin, end == std::string_view::npos ? gcode.size() - begin : end - begin);
+        if (const size_t comment = line.find(';'); comment != std::string_view::npos)
+            line = line.substr(0, comment);
+        if (std::any_of(line.begin(), line.end(), [](unsigned char ch) { return !std::isspace(ch); }))
+            return true;
+        if (end == std::string_view::npos)
+            break;
+        begin = end + 1;
+    }
+    return false;
+}
 
 static t_config_enum_names enum_names_from_keys_map(const t_config_enum_values &enum_keys_map)
 {
@@ -354,10 +375,11 @@ static const t_config_enum_values s_keys_map_BrimType = {
 };
 CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(BrimType)
 
-// using 0,1 to compatible with old files
+// Preserve the historical serialized values. GUI order is mapped separately.
 static const t_config_enum_values s_keys_map_TimelapseType = {
     {"0",       tlTraditional},
-    {"1",       tlSmooth}
+    {"1",       tlSmooth},
+    {"2",       tlOff}
 };
 CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(TimelapseType)
 
@@ -3304,6 +3326,50 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionEnum<MixedNozzleMode>(MixedNozzleMode::SameLayer));
 
+    def = this->add("mixed_nozzle_sparse_infill_combination", coBool);
+    def->label = L("Combine sparse infill");
+    def->category = L("Strength");
+    def->tooltip = L("For mixed-layer nozzle printing, combine sparse infill from several fine layers and print it once with the coarse nozzle. "
+                     "Outer walls remain on the original fine layer height.");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionBool(true));
+
+    def = this->add("mixed_nozzle_inner_wall_combination", coBool);
+    def->label = L("Combine inner walls");
+    def->category = L("Strength");
+    def->tooltip = L("For mixed-layer nozzle printing, combine inner walls from several fine layers and print them once with the coarse nozzle. "
+                     "This is experimental and should be verified on simple models first.");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionBool(false));
+
+    def = this->add("mixed_nozzle_internal_solid_infill_combination", coBool);
+    def->label = L("Combine internal solid infill");
+    def->category = L("Strength");
+    def->tooltip = L("For mixed-layer nozzle printing, combine internal solid infill from several fine layers and print it once with the coarse nozzle. "
+                     "Top and bottom surfaces are not intended for this experimental option.");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionBool(false));
+
+    def = this->add("mixed_nozzle_auto_coarse_layer_height", coBool);
+    // TRN: In mixed-nozzle printing, "coarse" means the larger nozzle feature, not rough print quality.
+    def->label = L("Auto coarse layer height");
+    def->category = L("Strength");
+    def->tooltip = L("Automatically choose the coarse feature layer height from the selected coarse nozzle. "
+                     "The default target is half of the coarse nozzle diameter, limited by the coarse extruder max layer height when it is set.");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionBool(true));
+
+    def = this->add("mixed_nozzle_coarse_layer_height", coFloat);
+    // TRN: In mixed-nozzle printing, "coarse" means the larger nozzle feature, not rough print quality.
+    def->label = L("Coarse layer height");
+    def->category = L("Strength");
+    def->tooltip = L("Manual target layer height for coarse mixed-nozzle features. "
+                     "The slicer converts this value to an integer multiple of the current fine layer height.");
+    def->sidetext = "mm";
+    def->min = 0;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(0.));
+
     def = this->add("mixed_nozzle_auto_layer_height_ratio", coBool);
     def->label = L("Auto mixed nozzle layer ratio");
     def->category = L("Strength");
@@ -3706,6 +3772,48 @@ void PrintConfigDef::init_fff_params()
     def->height =5;
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionString());
+
+    def = this->add("supports_esp32_timelapse", coBool);
+    def->label = L("Supports ESP32 Timelapse Box");
+    def->tooltip = L("Adds an ESP32 Timelapse Box frame trigger whenever timelapse is enabled on this Klipper printer. The printer's native timelapse command remains active.");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionBool(false));
+
+    def = this->add("esp32_timelapse_gcode", coString);
+    def->label = L("ESP32 Timelapse Box G-code");
+    def->tooltip = L("G-code command emitted by the slicer when the ESP32 Timelapse Box should capture a frame.");
+    def->mode = comDevelop;
+    def->set_default_value(new ConfigOptionString("ESP_TIMELAPSE_SHOT"));
+
+    def = this->add("esp32_timelapse_park_x", coFloat);
+    def->label = L("ESP32 Timelapse Box park X");
+    def->tooltip = L("Explicit X position used by Smooth mode before triggering the ESP32 Timelapse Box.");
+    def->sidetext = "mm";
+    def->mode = comDevelop;
+    def->set_default_value(new ConfigOptionFloat(-99999.0));
+
+    def = this->add("esp32_timelapse_park_y", coFloat);
+    def->label = L("ESP32 Timelapse Box park Y");
+    def->tooltip = L("Explicit Y position used by Smooth mode before triggering the ESP32 Timelapse Box.");
+    def->sidetext = "mm";
+    def->mode = comDevelop;
+    def->set_default_value(new ConfigOptionFloat(-99999.0));
+
+    def = this->add("esp32_timelapse_travel_speed", coFloat);
+    def->label = L("ESP32 Timelapse Box travel speed");
+    def->tooltip = L("Travel feedrate used to move to the ESP32 Timelapse Box Smooth-mode park position.");
+    def->sidetext = "mm/min";
+    def->min = 1.0;
+    def->mode = comDevelop;
+    def->set_default_value(new ConfigOptionFloat(18000.0));
+
+    def = this->add("esp32_timelapse_dwell_ms", coInt);
+    def->label = L("ESP32 Timelapse Box dwell");
+    def->tooltip = L("Dwell time after each ESP32 Timelapse Box frame command. It must be at least 2000 ms so polling and camera exposure complete before printing resumes.");
+    def->sidetext = "ms";
+    def->min = ESP32_TIMELAPSE_MIN_DWELL_MS;
+    def->mode = comDevelop;
+    def->set_default_value(new ConfigOptionInt(2000));
 
     def = this->add("silent_mode", coBool);
     def->label = L("Supports silent mode");
@@ -5083,16 +5191,15 @@ void PrintConfigDef::init_fff_params()
 
     def = this->add("timelapse_type", coEnum);
     def->label = L("Timelapse");
-    def->tooltip = L("If smooth or traditional mode is selected, a timelapse video will be generated for each print. "
-                     "After each layer is printed, a snapshot is taken with the chamber camera. "
-                     "All of these snapshots are composed into a timelapse video when printing completes. "
-                     "If smooth mode is selected, the toolhead will move to the excess chute after each layer is printed "
-                     "and then take a snapshot. "
-                     "Since the melt filament may leak from the nozzle during the process of taking a snapshot, "
-                     "prime tower is required for smooth mode to wipe nozzle.");
+    def->tooltip = L("Controls timelapse capture. Off disables both the printer's native timelapse and any configured ESP32 Timelapse Box trigger. "
+                     "Traditional keeps the printer's native capture behavior and, on printers with ESP32 capability, additionally triggers the external camera after each completed layer. "
+                     "Smooth uses one stabilization tower and safely lifts and parks the toolhead before the external camera trigger. "
+                     "The printer's native camera and the ESP32 external camera may capture at different moments. Smooth uses additional material and print time.");
     def->enum_keys_map = &ConfigOptionEnum<TimelapseType>::get_enum_values();
+    def->enum_values.emplace_back("2");
     def->enum_values.emplace_back("0");
     def->enum_values.emplace_back("1");
+    def->enum_labels.emplace_back(L("Off"));
     def->enum_labels.emplace_back(L("Traditional"));
     def->enum_labels.emplace_back(L("Smooth"));
     def->mode = comSimple;
@@ -7249,10 +7356,9 @@ void PrintConfigDef::handle_legacy(t_config_option_key &opt_key, std::string &va
         opt_key = "slow_down_for_layer_cooling";
     } else if (opt_key == "timelapse_no_toolhead") {
         opt_key = "timelapse_type";
-    } else if (opt_key == "timelapse_type" && value == "2") {
-        // old file "0" is None, "2" is Traditional
-        // new file "0" is Traditional, erase "2"
-        value = "0";
+    } else if (opt_key == "timelapse_type" && value == "off") {
+        // Compatibility with development builds that serialized the explicit Off state by name.
+        value = "2";
     } else if (opt_key == "support_type" && value == "normal") {
         value = "normal(manual)";
     } else if (opt_key == "support_type" && value == "tree") {
@@ -7271,6 +7377,15 @@ void PrintConfigDef::handle_legacy(t_config_option_key &opt_key, std::string &va
             if (copy_key != split_key) {
                 ReplaceString(value, split_key, copy_key);
             }
+        }
+    } else if (opt_key == "esp32_timelapse_gcode" && value == "ESP32_TIMELAPSE_SHOT") {
+        value = "ESP_TIMELAPSE_SHOT";
+    } else if (opt_key == "esp32_timelapse_dwell_ms") {
+        try {
+            if (boost::lexical_cast<int>(value) < ESP32_TIMELAPSE_MIN_DWELL_MS)
+                value = std::to_string(ESP32_TIMELAPSE_MIN_DWELL_MS);
+        } catch (const boost::bad_lexical_cast&) {
+            // Preserve malformed values so normal configuration validation still reports them.
         }
     } else if (opt_key == "overhang_fan_threshold" && value == "5%") {
         value = "10%";
@@ -7521,9 +7636,10 @@ void DynamicPrintConfig::normalize_fdm(int used_filaments)
         //ConfigOptionBool* alh_opt = this->option<ConfigOptionBool>("adaptive_layer_height");
         ConfigOptionEnum<PrintSequence>* ps_opt = this->option<ConfigOptionEnum<PrintSequence>>("print_sequence");
 
-        ConfigOptionEnum<TimelapseType>* timelapse_opt = this->option<ConfigOptionEnum<TimelapseType>>("timelapse_type");
-        bool is_smooth_timelapse = timelapse_opt != nullptr && timelapse_opt->value == TimelapseType::tlSmooth;
-        if (!is_smooth_timelapse && (used_filaments == 1 || ps_opt->value == PrintSequence::ByObject)) {
+        const bool uses_smooth_timelapse_tower = dynamic_print_config_uses_smooth_timelapse_tower(*this);
+        if (uses_smooth_timelapse_tower) {
+            ept_opt->value = true;
+        } else if (used_filaments == 1 || ps_opt->value == PrintSequence::ByObject) {
             ept_opt->value = false;
         }
 
@@ -7587,6 +7703,11 @@ void DynamicPrintConfig::normalize_fdm_1()
         // Resolution will be above 1um.
         opt_gcode_resolution->value = std::max(opt_gcode_resolution->value, 0.001);
 
+    if (ConfigOptionBool* ept_opt = this->option<ConfigOptionBool>("enable_prime_tower");
+        ept_opt != nullptr && dynamic_print_config_uses_smooth_timelapse_tower(*this)) {
+        ept_opt->value = true;
+    }
+
     return;
 }
 
@@ -7599,9 +7720,13 @@ t_config_option_keys DynamicPrintConfig::normalize_fdm_2(int num_objects, int us
         //ConfigOptionBool* alh_opt = this->option<ConfigOptionBool>("adaptive_layer_height");
         ConfigOptionEnum<PrintSequence>* ps_opt = this->option<ConfigOptionEnum<PrintSequence>>("print_sequence");
 
-        ConfigOptionEnum<TimelapseType>* timelapse_opt = this->option<ConfigOptionEnum<TimelapseType>>("timelapse_type");
-        bool is_smooth_timelapse = timelapse_opt != nullptr && timelapse_opt->value == TimelapseType::tlSmooth;
-        if (!is_smooth_timelapse && (used_filaments == 1 || (ps_opt->value == PrintSequence::ByObject && num_objects > 1))) {
+        const bool uses_smooth_timelapse_tower = dynamic_print_config_uses_smooth_timelapse_tower(*this);
+        if (uses_smooth_timelapse_tower) {
+            if (!ept_opt->value) {
+                ept_opt->value = true;
+                changed_keys.push_back("enable_prime_tower");
+            }
+        } else if (used_filaments == 1 || (ps_opt->value == PrintSequence::ByObject && num_objects > 1)) {
             if (ept_opt->value) {
                 ept_opt->value = false;
                 changed_keys.push_back("enable_prime_tower");
@@ -8932,6 +9057,25 @@ Points get_bed_shape(const DynamicPrintConfig &config)
 Points get_bed_shape(const PrintConfig &cfg)
 {
     return to_points(make_counter_clockwise(cfg.printable_area.values));
+}
+
+bool print_config_has_valid_esp32_park_position(const PrintConfig& config)
+{
+    const double x = config.esp32_timelapse_park_x.value;
+    const double y = config.esp32_timelapse_park_y.value;
+    const Points bed_shape = get_bed_shape(config);
+    if (!std::isfinite(x) || !std::isfinite(y) || bed_shape.size() < 3)
+        return false;
+
+    const Point park = Point::new_scale(x, y);
+    if (!Polygon(bed_shape).contains(park))
+        return false;
+
+    for (const Polygon& excluded : get_bed_excluded_area(config)) {
+        if (excluded.contains(park))
+            return false;
+    }
+    return true;
 }
 
 Points get_bed_shape(const SLAPrinterConfig &cfg) { return to_points(make_counter_clockwise(cfg.printable_area.values)); }

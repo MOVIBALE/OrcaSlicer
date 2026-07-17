@@ -1,5 +1,6 @@
 #include "Plater.hpp"
 #include "MixedFilamentDialog.hpp"
+#include "MixedNozzleWorkstationDialog.hpp"
 #include "MixedGradientSelector.hpp"
 #include "MixedColorMatchPanel.hpp"
 #include "MixedFilamentBadge.hpp"
@@ -250,6 +251,7 @@ static void collect_filament_slots_from_config(
     std::set<int>& used_slots)
 {
     static const std::vector<const char*> keys_1based = {
+        "outer_wall_filament",
         "wall_filament",
         "sparse_infill_filament",
         "solid_infill_filament"
@@ -293,6 +295,7 @@ static void collect_filament_slots_from_model_config(
     // Per-object feature-specific keys (wall_filament, etc.) may be
     // overridden independently of the object's primary extruder.
     static const std::vector<const char*> feature_keys = {
+        "outer_wall_filament",
         "wall_filament",
         "sparse_infill_filament",
         "solid_infill_filament",
@@ -525,9 +528,25 @@ void build_machine_filament_list(PresetBundle* preset_bundle, std::vector<Filame
     if (!preset_bundle)
         return;
 
+    int maxIndex = -1;
+    for (const auto& info : preset_bundle->m_connect_machine_info_list)
+        maxIndex = std::max(maxIndex, info.index);
+    if (maxIndex < 0)
+        return;
+
+    out_list.resize(static_cast<size_t>(maxIndex) + 1);
+    for (size_t i = 0; i < out_list.size(); ++i) {
+        out_list[i].m_index = static_cast<unsigned int>(i);
+        out_list[i].m_name = "NONE";
+        out_list[i].m_type = "NONE";
+    }
+
     for (const auto& info : preset_bundle->m_connect_machine_info_list) {
+        if (info.index < 0 || static_cast<size_t>(info.index) >= out_list.size())
+            continue;
+
         FilamentData fd;
-        fd.m_index = info.index;
+        fd.m_index = static_cast<unsigned int>(info.index);
         fd.m_name  = info.filament_info;
         fd.m_type  = info.filament_type;
         
@@ -535,7 +554,7 @@ void build_machine_filament_list(PresetBundle* preset_bundle, std::vector<Filame
             fd.m_color = FilamentColor::FromColors(info.multiColors, info.colorMode, info.color_info);
         }
 
-        out_list.push_back(std::move(fd));
+        out_list[static_cast<size_t>(info.index)] = std::move(fd);
     }
 }
 
@@ -717,14 +736,32 @@ static bool apply_printer_nozzle_diameters(const std::vector<double>& diameters)
         return false;
 
     Tab* printer_tab = wxGetApp().get_tab(Preset::TYPE_PRINTER);
-    if (printer_tab == nullptr || printer_tab->get_config() == nullptr)
+    PresetBundle* preset_bundle = wxGetApp().preset_bundle;
+    if (printer_tab == nullptr || printer_tab->get_config() == nullptr || preset_bundle == nullptr)
         return false;
+
+    const DynamicPrintConfig& current_config = preset_bundle->printers.get_edited_preset().config;
+    const std::string printer_model = current_config.opt_string("printer_model");
+    const std::string target_variant = primary_nozzle_variant(diameters);
+    const Preset* target_preset = target_variant.empty() ? nullptr :
+        preset_bundle->printers.find_system_preset_by_model_and_variant(printer_model, target_variant);
+
+    if (target_preset != nullptr && target_preset->name != preset_bundle->printers.get_selected_preset().name) {
+        std::vector<std::string> transferable_options = preset_bundle->printers.current_dirty_options(true);
+        transferable_options.erase(
+            std::remove(transferable_options.begin(), transferable_options.end(), "nozzle_diameter"),
+            transferable_options.end());
+        if (!transferable_options.empty())
+            printer_tab->cache_config_diff(transferable_options);
+
+        if (!printer_tab->select_preset(target_preset->name))
+            return false;
+    }
 
     DynamicPrintConfig new_conf = *printer_tab->get_config();
     new_conf.set_key_value("nozzle_diameter", new ConfigOptionFloats(diameters));
     printer_tab->load_config(new_conf);
-    if (wxGetApp().preset_bundle != nullptr)
-        wxGetApp().preset_bundle->update_multi_material_filament_presets();
+    preset_bundle->update_multi_material_filament_presets();
     return true;
 }
 
@@ -881,7 +918,9 @@ static bool load_machine_filament_sync_list()
 
         ConnectMachineInfo machine_info;
         machine_info.index         = int(slot.slot_index);
-        machine_info.filament_info = slot.display_name;
+        machine_info.physical_index = int(slot.physical_index);
+        machine_info.filament_info = slot.exists ? slot.display_name : "NONE";
+        machine_info.filament_type = slot.exists ? slot.filament_type : "NONE";
         machine_info.color_info    = slot.color;
         machine_info.nozzle_info   = slot.nozzle_diameter;
         bundle->m_connect_machine_info_list.push_back(machine_info);
@@ -1228,6 +1267,12 @@ struct Sidebar::priv
     ScalableButton* m_btn_add_color_mix       = nullptr;
     ScalableButton* m_btn_del_color_mix       = nullptr;
 
+    StaticBox*      m_panel_mixed_nozzle_title   = nullptr;
+    wxPanel*        m_panel_mixed_nozzle_content = nullptr;
+    ScalableButton* m_mixed_nozzle_icon          = nullptr;
+    ScalableButton* m_btn_mixed_nozzle_settings  = nullptr;
+    wxStaticText*   m_staticText_mixed_nozzle_summary = nullptr;
+
     wxStaticLine* m_staticline2;
     wxPanel* m_panel_project_title;
     ScalableButton* m_filament_icon = nullptr;
@@ -1246,8 +1291,6 @@ struct Sidebar::priv
 
     // nozzle notebook  and related controls
     CustomNotebook*                  m_nozzle_notebook{nullptr};
-    std::vector<ComboBox*>       m_nozzle_diameter_lists;
-    std::vector<ScalableButton*> m_nozzle_edit_btns;
 
     ObjectList          *m_object_list{ nullptr };
     ObjectSettings      *object_settings{ nullptr };
@@ -2428,7 +2471,7 @@ Sidebar::Sidebar(Plater *parent)
         wxBoxSizer* nozzle_sizer = new wxBoxSizer(wxVERTICAL);
         nozzle_sizer->Add(p->m_nozzle_notebook, 1, wxEXPAND | wxALL, FromDIP(0));
         nozzle_container->SetSizer(nozzle_sizer);
-        nozzle_container->SetMinSize(wxSize(-1, FromDIP(80)));
+        nozzle_container->SetMinSize(wxSize(-1, FromDIP(68)));
 
         // 添加到主布局
         vsizer_printer->Add(nozzle_container, 0, wxEXPAND | wxALL, FromDIP(4));
@@ -2511,7 +2554,7 @@ Sidebar::Sidebar(Plater *parent)
 
     ams_btn = new ScalableButton(p->m_panel_filament_title, wxID_ANY, "ams_fila_sync", wxEmptyString, wxDefaultSize, wxDefaultPosition,
                                                  wxBU_EXACTFIT | wxNO_BORDER, false, 16); // ORCA match icon size with other icons as 16x16
-    ams_btn->SetToolTip(_L("Synchronize filament list from printer"));
+    ams_btn->SetToolTip(_L("Synchronize filament list from AMS"));
     ams_btn->Bind(wxEVT_BUTTON, [this, scrolled_sizer](wxCommandEvent &e) {
         sync_ams_list();
     });
@@ -2669,6 +2712,9 @@ Sidebar::Sidebar(Plater *parent)
     sizer_filaments2->Add(p->m_panel_physical_filaments_title, 0, wxEXPAND, 0);
     sizer_filaments2->AddSpacer(FromDIP(8));
     sizer_filaments2->Add(p->m_scrolled_filaments, 0, wxEXPAND, 0);
+    sizer_filaments2->AddSpacer(FromDIP(8));
+    // --- Mixed Nozzle Panel (inside filament content, same level as filaments) ---
+    init_mixed_nozzle_panel(p->m_panel_filament_content, sizer_filaments2);
     sizer_filaments2->AddSpacer(FromDIP(8));
     // --- Color Mix Panel (inside filament content, same level as filaments) ---
     init_color_mix_panel(p->m_panel_filament_content, sizer_filaments2);
@@ -3678,6 +3724,7 @@ void Sidebar::on_filaments_change(size_t num_filaments)
     update_ui_from_settings();
     update_dynamic_filament_list();
     update_mixed_filament_panel();
+    update_mixed_nozzle_panel();
     update_color_mix_panel();
 
     // Disable add buttons when combined filament limit reached
@@ -5996,6 +6043,148 @@ static std::vector<size_t> build_mixed_filament_ui_indices(const std::vector<Mix
     return ordered_indices;
 }
 
+void Sidebar::init_mixed_nozzle_panel(wxWindow* parent, wxSizer* sizer)
+{
+    p->m_panel_mixed_nozzle_title = new StaticBox(parent, wxID_ANY, wxDefaultPosition,
+                                                  wxDefaultSize, wxTAB_TRAVERSAL | wxBORDER_NONE);
+    p->m_panel_mixed_nozzle_title->SetBackgroundColor(wxColour(248, 248, 248));
+    p->m_panel_mixed_nozzle_title->SetBackgroundColor2(0xF1F1F1);
+    p->m_panel_mixed_nozzle_title->SetMinSize(wxSize(-1, FromDIP(30)));
+    p->m_panel_mixed_nozzle_title->SetMaxSize(wxSize(-1, FromDIP(30)));
+
+    p->m_mixed_nozzle_icon = new ScalableButton(p->m_panel_mixed_nozzle_title, wxID_ANY, "nozzle_sync");
+    auto* label = new Label(p->m_panel_mixed_nozzle_title, _L("Mixed Nozzle"), LB_PROPAGATE_MOUSE_EVENT);
+    p->m_btn_mixed_nozzle_settings = new ScalableButton(p->m_panel_mixed_nozzle_title, wxID_ANY, "settings");
+    p->m_btn_mixed_nozzle_settings->SetToolTip(_L("Open mixed nozzle workstation"));
+
+    auto* h_title = new wxBoxSizer(wxHORIZONTAL);
+    auto* white_left = new wxPanel(p->m_panel_mixed_nozzle_title, wxID_ANY, wxDefaultPosition, wxSize(FromDIP(SidebarProps::ContentMargin()), -1));
+    white_left->SetBackgroundColour(StateColor::darkModeColorFor(*wxWHITE));
+    h_title->Add(white_left, 0, wxEXPAND | wxTOP | wxBOTTOM, 0);
+    h_title->Add(p->m_mixed_nozzle_icon, 0, wxALIGN_CENTER_VERTICAL | wxLEFT, FromDIP(SidebarProps::TitlebarMargin()));
+    h_title->AddSpacer(FromDIP(SidebarProps::ElementSpacing()));
+    h_title->Add(label, 0, wxALIGN_CENTER_VERTICAL);
+    h_title->AddStretchSpacer();
+    h_title->Add(p->m_btn_mixed_nozzle_settings, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(8));
+    auto* white_right = new wxPanel(p->m_panel_mixed_nozzle_title, wxID_ANY, wxDefaultPosition, wxSize(FromDIP(SidebarProps::ContentMargin()), -1));
+    white_right->SetBackgroundColour(StateColor::darkModeColorFor(*wxWHITE));
+    h_title->Add(white_right, 0, wxEXPAND | wxTOP | wxBOTTOM, 0);
+    p->m_panel_mixed_nozzle_title->SetSizer(h_title);
+
+    p->m_panel_mixed_nozzle_content = new wxPanel(parent, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxTAB_TRAVERSAL);
+    p->m_panel_mixed_nozzle_content->SetBackgroundColour(StateColor::darkModeColorFor(*wxWHITE));
+    auto* content_sizer = new wxBoxSizer(wxHORIZONTAL);
+    content_sizer->AddSpacer(FromDIP(SidebarProps::ContentMargin()));
+    p->m_staticText_mixed_nozzle_summary = new wxStaticText(p->m_panel_mixed_nozzle_content, wxID_ANY, wxEmptyString);
+    p->m_staticText_mixed_nozzle_summary->SetMinSize(wxSize(0, FromDIP(28)));
+    content_sizer->Add(p->m_staticText_mixed_nozzle_summary, 1, wxEXPAND | wxTOP | wxBOTTOM, FromDIP(6));
+    content_sizer->AddSpacer(FromDIP(SidebarProps::ContentMargin()));
+    p->m_panel_mixed_nozzle_content->SetSizer(content_sizer);
+
+    sizer->Add(p->m_panel_mixed_nozzle_title, 0, wxEXPAND, 0);
+    sizer->Add(p->m_panel_mixed_nozzle_content, 0, wxEXPAND, 0);
+
+    p->m_btn_mixed_nozzle_settings->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
+        PresetBundle* pb = wxGetApp().preset_bundle;
+        if (!pb)
+            return;
+
+        DynamicPrintConfig& print_config = pb->prints.get_edited_preset().config;
+        const DynamicPrintConfig& printer_config = pb->printers.get_edited_preset().config;
+        std::vector<std::string> filament_names;
+        filament_names.reserve(p->combos_filament.size());
+        for (PlaterPresetComboBox* combo : p->combos_filament) {
+            if (combo != nullptr) {
+                const wxString text = combo->GetStringSelection();
+                filament_names.emplace_back(text.ToUTF8().data());
+            } else {
+                filament_names.emplace_back();
+            }
+        }
+        std::vector<int> physical_tool_indices;
+        for (const ConnectMachineInfo& machine_info : pb->m_connect_machine_info_list) {
+            if (machine_info.index < 0)
+                continue;
+            if (physical_tool_indices.size() <= size_t(machine_info.index))
+                physical_tool_indices.resize(size_t(machine_info.index) + 1, -1);
+            physical_tool_indices[size_t(machine_info.index)] = machine_info.physical_index >= 0 ?
+                machine_info.physical_index : machine_info.index;
+        }
+
+        MixedNozzleWorkstationDialog dlg(wxGetApp().mainframe, print_config, printer_config, filament_names, physical_tool_indices);
+        if (dlg.ShowModal() != wxID_OK)
+            return;
+
+        dlg.apply_to_config(print_config);
+        if (auto* print_tab = wxGetApp().get_tab(Preset::TYPE_PRINT)) {
+            print_tab->reload_config();
+            print_tab->update_dirty();
+        }
+        if (wxGetApp().mainframe)
+            wxGetApp().mainframe->on_config_changed(&print_config);
+        wxGetApp().plater()->post_slice_state_change_update();
+        update_mixed_nozzle_panel();
+        Layout();
+    });
+
+    update_mixed_nozzle_panel();
+}
+
+void Sidebar::update_mixed_nozzle_panel()
+{
+    if (!p->m_panel_mixed_nozzle_title || !p->m_panel_mixed_nozzle_content)
+        return;
+
+    PresetBundle* pb = wxGetApp().preset_bundle;
+    const ConfigOptionFloats* nozzles = pb ? pb->printers.get_edited_preset().config.option<ConfigOptionFloats>("nozzle_diameter") : nullptr;
+    const ConfigOptionString* printer_model = pb ? pb->printers.get_edited_preset().config.option<ConfigOptionString>("printer_model") : nullptr;
+    const bool show = pb != nullptr &&
+        ((nozzles != nullptr && nozzles->values.size() >= 2) ||
+         p->combos_filament.size() >= 2 ||
+         pb->m_connect_machine_info_list.size() >= 2 ||
+         (printer_model != nullptr && printer_model->value.find("U1") != std::string::npos));
+    p->m_panel_mixed_nozzle_title->Show(show);
+    p->m_panel_mixed_nozzle_content->Show(show);
+    if (!show) {
+        if (wxWindow* parent = p->m_panel_mixed_nozzle_title->GetParent())
+            parent->Layout();
+        return;
+    }
+
+    const DynamicPrintConfig& config = pb->prints.get_edited_preset().config;
+    const auto* mode_opt = config.option<ConfigOptionEnum<MixedNozzleMode>>("mixed_nozzle_mode");
+    const MixedNozzleMode mode = mode_opt ? mode_opt->value : MixedNozzleMode::SameLayer;
+    const int inner = std::max(1, config.opt_int("wall_filament"));
+    const int outer_config = config.opt_int("outer_wall_filament");
+    const int outer = outer_config > 0 ? outer_config : inner;
+    const int sparse = std::max(1, config.opt_int("sparse_infill_filament"));
+    const int solid = std::max(1, config.opt_int("solid_infill_filament"));
+    const bool sparse_combined = config.opt_bool("mixed_nozzle_sparse_infill_combination");
+    const bool inner_combined = config.opt_bool("mixed_nozzle_inner_wall_combination");
+    const bool solid_combined = config.opt_bool("mixed_nozzle_internal_solid_infill_combination");
+
+    wxString summary;
+    if (mode == MixedNozzleMode::MixedLayer) {
+        summary = wxString::Format("%s  T%d/T%d/T%d/T%d", _L("Mixed layer"), outer - 1, inner - 1, sparse - 1, solid - 1);
+        if (sparse_combined || inner_combined || solid_combined) {
+            summary += "  ";
+            if (sparse_combined)
+                summary += _L("Infill");
+            if (inner_combined)
+                summary += (sparse_combined ? wxString("+") : wxString()) + _L("Inner");
+            if (solid_combined)
+                summary += ((sparse_combined || inner_combined) ? wxString("+") : wxString()) + _L("Solid");
+        }
+    } else {
+        summary = wxString::Format("%s  T%d/T%d/T%d/T%d", _L("Same layer"), outer - 1, inner - 1, sparse - 1, solid - 1);
+    }
+
+    p->m_staticText_mixed_nozzle_summary->SetLabel(summary);
+    p->m_panel_mixed_nozzle_content->Layout();
+    if (wxWindow* parent = p->m_panel_mixed_nozzle_title->GetParent())
+        parent->Layout();
+}
+
 void Sidebar::init_color_mix_panel(wxWindow* parent, wxSizer* sizer)
 {
     // Title bar
@@ -8183,23 +8372,16 @@ void Sidebar::load_ams_list(std::string const &device, MachineObject* obj)
 
 void Sidebar::sync_ams_list()
 {
-    const bool loaded_machine_filaments = load_machine_filament_sync_list();
-    if (loaded_machine_filaments) {
-        p->ams_list_device = "connected_machine";
-        for (auto c : p->combos_filament)
-            c->update();
-    }
-
-    // Force load ams list when the connected printer did not expose head-slot filament info.
+    // Force load ams list
     auto obj = wxGetApp().getDeviceManager()->get_selected_machine();
-    if (!loaded_machine_filaments && obj)
+    if (obj)
         GUI::wxGetApp().sidebar().load_ams_list(obj->dev_id, obj);
 
     auto & list = wxGetApp().preset_bundle->filament_ams_list;
     if (list.empty()) {
         MessageDialog dlg(this,
-            _L("No printer filament information. Please select a printer in 'Device' page to load filament info."),
-            _L("Sync filaments with printer"), wxOK);
+            _L("No AMS filaments. Please select a printer in 'Device' page to load AMS info."),
+            _L("Sync filaments with AMS"), wxOK);
         dlg.ShowModal();
         return;
     }
@@ -8210,9 +8392,9 @@ void Sidebar::sync_ams_list()
     struct SyncAmsDialog : MessageDialog {
         SyncAmsDialog(wxWindow * parent, bool first): MessageDialog(parent,
             first
-                ? _L("Sync filaments with printer will drop all current selected filament presets and colors. Do you want to continue?")
+                ? _L("Sync filaments with AMS will drop all current selected filament presets and colors. Do you want to continue?")
                 : _L("Already did a synchronization, do you want to sync only changes or resync all?"),
-            _L("Sync filaments with printer"), 0)
+            _L("Sync filaments with AMS"), 0)
         {
             if (first) {
                 add_button(wxID_YES, true, _L("Yes"));
@@ -8249,7 +8431,7 @@ void Sidebar::sync_ams_list()
     if (n == 0) {
         MessageDialog dlg(this,
             _L("There are no compatible filaments, and sync is not performed."),
-            _L("Sync filaments with printer"), wxOK);
+            _L("Sync filaments with AMS"), wxOK);
         dlg.ShowModal();
         return;
     }
@@ -8258,7 +8440,7 @@ void Sidebar::sync_ams_list()
     if (unknowns > 0) {
         MessageDialog dlg(this,
             _L("There are some unknown filaments mapped to generic preset. Please update Snapmaker Orca or restart Snapmaker Orca to check if there is an update to system presets."),
-            _L("Sync filaments with printer"), wxOK);
+            _L("Sync filaments with AMS"), wxOK);
         dlg.ShowModal();
     }
     wxGetApp().plater()->on_filaments_change(n);
@@ -8360,6 +8542,12 @@ void Sidebar::show_sync_filament_dialog()
     PresetBundle* preset_bundle = wxGetApp().preset_bundle;
     if (!preset_bundle)
         return;
+
+    // The device page normally fills this list. Query the connected U1 directly
+    // only when that cache is unavailable, keeping the official sync UI as the
+    // single owner of matching and override behavior.
+    if (preset_bundle->m_connect_machine_info_list.empty())
+        load_machine_filament_sync_list();
 
     std::vector<FilamentData> machineFilamentList;
     build_machine_filament_list(preset_bundle, machineFilamentList);
@@ -8518,20 +8706,16 @@ void Sidebar::update_nozzle_settings(bool switch_machine)
 
     // Clear existing pages and controls
     p->m_nozzle_notebook->DeleteAllPages();
-    p->m_nozzle_diameter_lists.clear();
-    p->m_nozzle_edit_btns.clear();
 
     // Recreate pages for new nozzle count
     // Create tabs for each nozzle
     for (size_t i = 0; i < new_nozzle_count; i++) {
         wxPanel* nozzle_panel = new wxPanel(p->m_nozzle_notebook, wxID_ANY, wxDefaultPosition, wxDefaultSize,
                                             wxTAB_TRAVERSAL | wxBORDER_NONE);
-        // nozzle_panel->SetBackgroundColour(wxColour(255, 255, 255));
 
         wxBoxSizer* tab_sizer = new wxBoxSizer(wxHORIZONTAL);
 
-        // Add diameter label and combobox
-        wxBoxSizer*   diameter_sizer = new wxBoxSizer(wxHORIZONTAL);
+        wxBoxSizer* diameter_sizer = new wxBoxSizer(wxHORIZONTAL);
         wxStaticText* diameter_label = new wxStaticText(nozzle_panel, wxID_ANY, _L("Diameter"));
         bool          is_dark        = wxGetApp().app_config->get("dark_color_mode") == "1";
         if (!is_dark) {
@@ -8543,12 +8727,10 @@ void Sidebar::update_nozzle_settings(bool switch_machine)
         
         diameter_label->SetFont(Label::Body_14);
 
-        ComboBox* diameter_combo = new ComboBox(nozzle_panel, wxID_ANY, wxEmptyString, wxDefaultPosition, {-1, FromDIP(32)}, 0,
-                                                nullptr, wxCB_READONLY);
-        
+        ComboBox* diameter_combo = new ComboBox(nozzle_panel, wxID_ANY, wxEmptyString, wxDefaultPosition,
+                                                {-1, FromDIP(32)}, 0, nullptr, wxCB_READONLY);
+        diameter_combo->SetToolTip(_L("Shortcut for Printer settings > Extruder nozzle diameter."));
 
-        // Reuse the printer model's known variants as diameter choices, but keep the
-        // selected value per physical nozzle in nozzle_diameter[i].
         std::set<std::string> shown_diameters;
         auto                  diameters = wxGetApp().preset_bundle->printers.diameters_of_selected_printer();
         for (auto& diameter : diameters) {
@@ -8564,11 +8746,13 @@ void Sidebar::update_nozzle_settings(bool switch_machine)
             if (shown_diameters.insert(normalized).second)
                 diameter_combo->AppendString(format_nozzle_diameter_label(diameter));
         }
-        if (diameter_combo->GetCount() < 2) {
-            diameter_combo->Enable(false);
-        }
 
-        diameter_combo->Bind(wxEVT_COMBOBOX, [this, diameter_combo, i](wxCommandEvent& event) {
+        const double current_diameter = nozzle_diameters[std::min(i, nozzle_diameters.size() - 1)];
+        diameter_combo->SetValue(format_nozzle_diameter_label(current_diameter));
+        if (diameter_combo->GetCount() < 2)
+            diameter_combo->Enable(false);
+
+        diameter_combo->Bind(wxEVT_COMBOBOX, [this, diameter_combo, i](wxCommandEvent&) {
             double diameter = 0.0;
             if (!parse_nozzle_diameter_text(diameter_combo->GetValue(), diameter)) {
                 BOOST_LOG_TRIVIAL(error) << "invalid nozzle diameter selection: " << diameter_combo->GetValue().ToUTF8().data();
@@ -8591,21 +8775,14 @@ void Sidebar::update_nozzle_settings(bool switch_machine)
                 update_nozzle_settings(false);
                 if (p->m_nozzle_notebook && i < p->m_nozzle_notebook->GetPageCount())
                     p->m_nozzle_notebook->SetSelection(i);
+                update_mixed_nozzle_panel();
             });
-            // Do not event.Skip(): this handler schedules a rebuild of the nozzle UI.
         });
-
-        const double current_diameter = nozzle_diameters[std::min(i, nozzle_diameters.size() - 1)];
-        diameter_combo->SetValue(format_nozzle_diameter_label(current_diameter));
-
-        p->m_nozzle_diameter_lists.push_back(diameter_combo);
 
         diameter_sizer->AddSpacer(15);
         diameter_sizer->Add(diameter_label, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(5));
         diameter_sizer->AddSpacer(10);
         diameter_sizer->Add(diameter_combo, 1, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(15));
-
-        // 删除Flow相关控件
 
         tab_sizer->Add(diameter_sizer, 1, wxEXPAND | wxALIGN_CENTER_VERTICAL);
 
@@ -8839,7 +9016,7 @@ void Sidebar::update_printer_thumbnail()
     try {
         p->image_printer->SetBitmap(create_scaled_bitmap(png_name, this, 48));
     }
-    catch (std::exception& e) {
+    catch (const std::exception&) {
         p->image_printer->SetBitmap(create_scaled_bitmap("printer_placeholder", this, 48));
     }
     
@@ -9621,7 +9798,8 @@ Plater::priv::priv(Plater *q, MainFrame *main_frame)
         "extruder_colour", "filament_colour", "material_colour", "printable_height", "printer_model", "printer_technology",
         // These values are necessary to construct SlicingParameters by the Canvas3D variable layer height editor.
         "layer_height", "initial_layer_print_height", "min_layer_height", "max_layer_height",
-        "brim_width", "wall_loops", "outer_wall_filament", "wall_filament", "sparse_infill_density", "sparse_infill_filament", "solid_infill_filament", "top_shell_layers",
+        "brim_width", "wall_loops", "outer_wall_filament", "wall_filament", "sparse_infill_density",
+        "sparse_infill_filament", "solid_infill_filament", "top_shell_layers",
         "enable_support", "support_filament", "support_interface_filament",
         "support_top_z_distance", "support_bottom_z_distance", "raft_layers",
         "wipe_tower_rotation_angle", "wipe_tower_cone_angle", "wipe_tower_extra_spacing", "wipe_tower_extra_flow", "local_z_wipe_tower_purge_lines", "wipe_tower_max_purge_speed",
@@ -17492,7 +17670,7 @@ void Plater::calib_max_vol_speed(const Calib_Params& params)
     obj_cfg.set_key_value("brim_type", new ConfigOptionEnum<BrimType>(btOuterAndInner));
     obj_cfg.set_key_value("brim_width", new ConfigOptionFloat(5.0));
     obj_cfg.set_key_value("brim_object_gap", new ConfigOptionFloat(0.0));
-    print_config->set_key_value("timelapse_type", new ConfigOptionEnum<TimelapseType>(tlTraditional));
+    normalize_timelapse_for_spiral_vase(*print_config);
     print_config->set_key_value("spiral_mode", new ConfigOptionBool(true));
     print_config->set_key_value("max_volumetric_extrusion_rate_slope", new ConfigOptionFloat(0));
 
@@ -17580,7 +17758,7 @@ void Plater::calib_VFA(const Calib_Params& params)
     printer_config->set_key_value("resonance_avoidance", new ConfigOptionBool{false});
     filament_config->set_key_value("slow_down_layer_time", new ConfigOptionFloats { 0.0 });
     print_config->set_key_value("enable_overhang_speed", new ConfigOptionBool { false });
-    print_config->set_key_value("timelapse_type", new ConfigOptionEnum<TimelapseType>(tlTraditional));
+    normalize_timelapse_for_spiral_vase(*print_config);
     print_config->set_key_value("wall_loops", new ConfigOptionInt(1));
     print_config->set_key_value("alternate_extra_wall", new ConfigOptionBool(false));
     print_config->set_key_value("top_shell_layers", new ConfigOptionInt(0));
@@ -17631,7 +17809,7 @@ void Plater::calib_input_shaping_freq(const Calib_Params& params)
     filament_config->set_key_value("adaptive_pressure_advance", new ConfigOptionBools{false});
     print_config->set_key_value("layer_height", new ConfigOptionFloat(0.2));
     print_config->set_key_value("enable_overhang_speed", new ConfigOptionBool { false });
-    print_config->set_key_value("timelapse_type", new ConfigOptionEnum<TimelapseType>(tlTraditional));
+    normalize_timelapse_for_spiral_vase(*print_config);
     print_config->set_key_value("wall_loops", new ConfigOptionInt(1));
     print_config->set_key_value("top_shell_layers", new ConfigOptionInt(0));
     print_config->set_key_value("bottom_shell_layers", new ConfigOptionInt(1));
@@ -17679,7 +17857,7 @@ void Plater::calib_input_shaping_damp(const Calib_Params& params)
     filament_config->set_key_value("adaptive_pressure_advance", new ConfigOptionBools{false});
     print_config->set_key_value("layer_height", new ConfigOptionFloat(0.2));
     print_config->set_key_value("enable_overhang_speed", new ConfigOptionBool{false});
-    print_config->set_key_value("timelapse_type", new ConfigOptionEnum<TimelapseType>(tlTraditional));
+    normalize_timelapse_for_spiral_vase(*print_config);
     print_config->set_key_value("wall_loops", new ConfigOptionInt(1));
     print_config->set_key_value("top_shell_layers", new ConfigOptionInt(0));
     print_config->set_key_value("bottom_shell_layers", new ConfigOptionInt(1));
@@ -17728,7 +17906,7 @@ void Plater::calib_junction_deviation(const Calib_Params& params)
     filament_config->set_key_value("adaptive_pressure_advance", new ConfigOptionBools{false});
     print_config->set_key_value("layer_height", new ConfigOptionFloat(0.2));
     print_config->set_key_value("enable_overhang_speed", new ConfigOptionBool{false});
-    print_config->set_key_value("timelapse_type", new ConfigOptionEnum<TimelapseType>(tlTraditional));
+    normalize_timelapse_for_spiral_vase(*print_config);
     print_config->set_key_value("wall_loops", new ConfigOptionInt(1));
     print_config->set_key_value("top_shell_layers", new ConfigOptionInt(0));
     print_config->set_key_value("bottom_shell_layers", new ConfigOptionInt(1));
@@ -21256,6 +21434,12 @@ void Plater::on_config_change(const DynamicPrintConfig &config)
     bool bed_shape_changed = false;
     //bool print_sequence_changed = false;
     t_config_option_keys diff_keys = p->config->diff(config);
+    const bool mixed_nozzle_panel_changed = std::any_of(diff_keys.begin(), diff_keys.end(), [](const std::string& key) {
+        return key == "mixed_nozzle_mode" || key == "outer_wall_filament" || key == "wall_filament" ||
+               key == "sparse_infill_filament" || key == "solid_infill_filament" ||
+               key == "mixed_nozzle_sparse_infill_combination" || key == "mixed_nozzle_inner_wall_combination" ||
+               key == "mixed_nozzle_internal_solid_infill_combination";
+    });
     for (auto opt_key : diff_keys) {
         if (opt_key == "filament_colour") {
             update_scheduled = true; // update should be scheduled (for update 3DScene) #2738
@@ -21340,6 +21524,9 @@ void Plater::on_config_change(const DynamicPrintConfig &config)
 
     if (update_scheduled)
         update();
+
+    if (mixed_nozzle_panel_changed && p->sidebar != nullptr)
+        p->sidebar->update_mixed_nozzle_panel();
 
     if (p->main_frame->is_loaded()) {
         this->p->schedule_background_process();

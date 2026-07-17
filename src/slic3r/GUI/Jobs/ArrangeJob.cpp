@@ -294,10 +294,9 @@ void ArrangeJob::prepare_wipe_tower()
     bool enable_prime_tower = op && op->getBool();
     if (!enable_prime_tower || params.is_seq_print) return;
 
-    bool smooth_timelapse = false;
-    auto sop = current_config.option("timelapse_type");
-    if (sop) { smooth_timelapse = sop->getInt() == TimelapseType::tlSmooth; }
-    if (smooth_timelapse) { need_wipe_tower = true; }
+    const DynamicPrintConfig& printer_config = wxGetApp().preset_bundle->printers.get_edited_preset().config;
+    if (dynamic_print_config_uses_smooth_timelapse_tower(current_config, printer_config))
+        need_wipe_tower = true;
 
     // estimate if we need wipe tower for all plates:
     // need wipe tower if some object has multiple extruders (has paint-on colors or support material)

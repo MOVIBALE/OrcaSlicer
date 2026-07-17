@@ -6,6 +6,27 @@
 
 using namespace Slic3r;
 
+TEST_CASE("forced timelapse lift restores the requested path Z", "[GCodeWriter][Timelapse][ESP32]")
+{
+    GCodeWriter writer;
+    writer.config.travel_speed.value = 120.0;
+    writer.config.travel_speed_z.value = 12.0;
+    writer.set_extruders({ 0 });
+    writer.set_extruder(0);
+    writer.set_position(Vec3d(0.0, 0.0, 0.2));
+    writer.set_current_position_clear(true);
+
+    const std::string lift = writer.force_lift(0.4, "test timelapse lift");
+    REQUIRE(lift.find("Z.6") != std::string::npos);
+
+    const std::string travel = writer.travel_to_xyz(Vec3d(10.0, 10.0, 0.15), "test scarf start");
+    CHECK(travel.find(" Z") == std::string::npos);
+
+    const std::string restore = writer.unlift();
+    CHECK(restore.find("Z.15") != std::string::npos);
+    CHECK(writer.get_position().z() == Approx(0.15));
+}
+
 SCENARIO("lift() is not ignored after unlift() at normal values of Z", "[GCodeWriter]") {
     GIVEN("A config from a file and a single extruder.") {
         GCodeWriter writer;

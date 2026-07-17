@@ -1424,6 +1424,16 @@ void Choice::suppress_scroll()
     m_suppress_scroll = true;
 }
 
+static bool choice_uses_enum_key_mapping(const ConfigOptionDef& option, const t_config_option_key& option_id)
+{
+    return option.enum_keys_map != nullptr &&
+           (option_id == "top_surface_pattern" || option_id == "bottom_surface_pattern" ||
+            option_id == "internal_solid_infill_pattern" || option_id == "sparse_infill_pattern" ||
+            option_id == "support_base_pattern" || option_id == "support_interface_pattern" ||
+            option_id == "ironing_pattern" || option_id == "support_ironing_pattern" ||
+            option_id == "support_style" || option_id == "curr_bed_type" || option_id == "timelapse_type");
+}
+
 void Choice::set_selection()
 {
     /* To prevent earlier control updating under OSX set m_disable_change_event to true
@@ -1436,7 +1446,10 @@ void Choice::set_selection()
     choice_ctrl* field = dynamic_cast<choice_ctrl*>(window);
 	switch (m_opt.type) {
 	case coEnum:{
-        field->SetSelection(m_opt.default_value->getInt());
+        int selection = m_opt.default_value->getInt();
+        if (choice_uses_enum_key_mapping(m_opt, m_opt_id))
+            selection = m_opt.enum_value_to_gui_index(selection);
+        field->SetSelection(selection);
 		break;
 	}
 	case coFloat:
@@ -1557,24 +1570,8 @@ void Choice::set_value(const boost::any& value, bool change_event)
         if (m_opt_id.compare("host_type") == 0 && val != 0 &&
 			m_opt.enum_values.size() > field->GetCount()) // for case, when PrusaLink isn't used as a HostType
 			val--;
-        if (m_opt_id == "top_surface_pattern" || m_opt_id == "bottom_surface_pattern" ||
-            m_opt_id == "internal_solid_infill_pattern" || m_opt_id == "sparse_infill_pattern" ||
-            m_opt_id == "support_base_pattern" || m_opt_id == "support_interface_pattern" ||
-            m_opt_id == "ironing_pattern" || m_opt_id == "support_ironing_pattern" ||
-            m_opt_id == "support_style" || m_opt_id == "curr_bed_type")
-		{
-			std::string key;
-			const t_config_enum_values& map_names = *m_opt.enum_keys_map;
-			for (auto it : map_names)
-				if (val == it.second) {
-					key = it.first;
-					break;
-				}
-
-			const std::vector<std::string>& values = m_opt.enum_values;
-			auto it = std::find(values.begin(), values.end(), key);
-			val = it == values.end() ? 0 : it - values.begin();
-		}
+        if (choice_uses_enum_key_mapping(m_opt, m_opt_id))
+            val = m_opt.enum_value_to_gui_index(val);
         if (m_opt.nullable) {
             if (val != ConfigOptionEnumsGenericNullable::nil_value())
                 m_last_meaningful_value = value;
@@ -1648,15 +1645,8 @@ boost::any& Choice::get_value()
     {
         if (m_opt.nullable && field->GetSelection() == -1)
             m_value = ConfigOptionEnumsGenericNullable::nil_value();
-        else if (   m_opt_id == "top_surface_pattern" || m_opt_id == "bottom_surface_pattern" ||
-                    m_opt_id == "internal_solid_infill_pattern" || m_opt_id == "sparse_infill_pattern" ||
-                    m_opt_id == "support_base_pattern" || m_opt_id == "support_interface_pattern" ||
-                    m_opt_id == "ironing_pattern" || m_opt_id == "support_ironing_pattern" ||
-                    m_opt_id == "support_style" || m_opt_id == "curr_bed_type")
-        {
-            const std::string &key = m_opt.enum_values[field->GetSelection()];
-            m_value = int(m_opt.enum_keys_map->at(key));
-        }
+        else if (choice_uses_enum_key_mapping(m_opt, m_opt_id))
+            m_value = m_opt.gui_index_to_enum_value(field->GetSelection());
         // Support ThirdPartyPrinter
         else if (m_opt_id.compare("host_type") == 0 && m_opt.enum_values.size() > field->GetCount())
         {

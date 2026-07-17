@@ -31,12 +31,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Deprecate 20.04appimage
-          # - os: ubuntu-20.04
-          - os: ubuntu-24.04
           - os: windows-2022
-          - os: macos-14
-            arch: arm64
     uses: ./.github/workflows/build_check_cache.yml
     with:
       os: ${{ matrix.os }}
@@ -44,6 +39,7 @@ jobs:
       build-deps-only: ${{ inputs.build-deps-only || false }}
     secrets: inherit
   flatpak:
+    if: ${{ false }}
     name: "Flatpak"
     concurrency:
       group: flatpak-${{ matrix.variant.arch }}-${{ github.ref }}

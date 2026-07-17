@@ -1,6 +1,10 @@
 name: Build all
 
 on:
+  push:
+    branches:
+      - Min/ci-snaporca-2.3.5
+
   schedule:
     - cron: '0 18 * * *' # everyday 2:00(beijing time UTC+8)
 

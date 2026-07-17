@@ -11,14 +11,15 @@ The first real-print validated setup is:
 
 The implementation is not tied to that one nozzle pair. Configure other pairs
 by setting each U1 nozzle diameter, choosing feature filaments, setting the
-feature line widths, then selecting one of the two mixed nozzle modes:
+feature line widths, then opening the Mixed Nozzle workstation in the Prepare
+sidebar.
 
 - `Same layer, different line widths`: outer walls, inner walls, and infill
   stay on the current process layer height.
 - `Mixed layer, different line widths`: outer walls stay on the current fine
-  layer height, while inner walls and sparse infill are combined by an
-  automatic nozzle-diameter ratio. Disable the auto option only when you need
-  to force a manual ratio.
+  layer height, while selected internal features are combined for the coarse
+  nozzle. Sparse infill is the stable default. Inner walls and internal solid
+  infill are explicit experimental switches.
 
 The matching U1 firmware patch is required. Stock firmware validates every used
 physical nozzle against the first slicer nozzle diameter and rejects mixed-nozzle
@@ -38,6 +39,18 @@ toolhead selected by `extruder_map_table`.
 - Added `mixed_nozzle_mode`, `mixed_nozzle_auto_layer_height_ratio`, and
   `mixed_nozzle_layer_height_ratio` as generic controls for same-layer and
   mixed-layer mixed-nozzle slicing.
+- Added the Mixed Nozzle workstation in the Prepare sidebar. It writes the
+  normal process settings but presents them as quick plans, nozzle mapping,
+  feature assignment, layer combining, and validation.
+- Added `mixed_nozzle_sparse_infill_combination`,
+  `mixed_nozzle_inner_wall_combination`, and
+  `mixed_nozzle_internal_solid_infill_combination` so mixed-layer sparse
+  infill, inner walls, and internal solid infill are controlled separately.
+- Added automatic coarse layer height selection. The default target is half of
+  the coarse nozzle diameter, limited by the coarse extruder max layer height
+  when that limit is configured.
+- Added `scripts/check_mixed_nozzle_gcode.py` for repeatable role/tool G-code
+  validation.
 - Added experimental mixed-layer planning for internal walls and infill, so
   fine outer walls can be paired with combined coarse-nozzle inner
   walls/infill without hardcoding a 0.20 mm process value.
@@ -55,16 +68,17 @@ toolhead selected by `extruder_map_table`.
    to load the four head materials from the printer.
 6. Set nozzle 1 to `0.4 mm` and nozzle 2 to `0.2 mm`.
 7. Select `0.10 Mixed Layer Outer Nozzle2 Inner Nozzle1 @Snapmaker U1`.
-8. Check the feature filament settings:
+8. Open **Mixed Nozzle** in the Prepare sidebar.
+9. Use the workstation to check the feature assignment:
    - Outer wall: slot 2 / T1 / 0.2 mm
    - Wall: slot 1 / T0 / 0.4 mm
    - Sparse infill: slot 1 / T0 / 0.4 mm
    - Solid infill: slot 1 / T0 / 0.4 mm
-9. In Strength > Advanced, confirm:
-   - Mixed nozzle mode: `Mixed layer, different line widths`
-   - Auto mixed nozzle layer ratio: enabled
-   - Manual mixed nozzle layer height ratio: hidden unless auto ratio is disabled
-10. Slice a simple cube before testing real parts.
+10. For the conservative mixed-layer plan, enable sparse infill combining and
+    leave inner wall / internal solid infill combining disabled. The starter
+    0.10 profile keeps the earlier real-print behavior by enabling those
+    experimental switches explicitly.
+11. Slice a simple cube before testing real parts.
 
 For the older same-layer-height test profile, use
 `0.12 Mixed Nozzle Outer T0 Inner T1 @Snapmaker U1` and confirm the tool mapping
@@ -72,13 +86,13 @@ shown in that profile name. It should use `Same layer, different line widths`.
 
 ## G-code Verification
 
-The latest local cube validation used:
+The recorded cube validation used:
 
 - model: `20mmbox-LF.stl`
 - slicer process: `0.10 Mixed Layer Outer Nozzle2 Inner Nozzle1 @Snapmaker U1`
-- mixed nozzle mode: `mixed_layer`, automatic layer ratio enabled
+- mixed nozzle mode: `mixed_layer`, automatic coarse layer height enabled
 - nozzle table: T0 `0.4 mm`, T1 `0.2 mm`, T2 `0.4 mm`, T3 `0.4 mm`
-- output: `F:\FC\snaporca_gcode_check\auto_ratio_solid_20260621-145510\out_0402\plate_1.gcode`
+- output: an exported `plate_1.gcode` kept outside the source tree
 
 Observed G-code characteristics:
 
@@ -100,7 +114,7 @@ Observed G-code characteristics:
 An additional G-code-only check changed the coarse nozzle to T0 `0.8 mm` while
 keeping T1 `0.2 mm` for outer walls:
 
-- output: `F:\FC\snaporca_gcode_check\auto_ratio_solid_20260621-145510\out_0802\plate_1.gcode`
+- output: a second exported `plate_1.gcode` with the 0.8/0.2 nozzle table
 - outer wall moves: all T1 at `HEIGHT=0.1`
 - inner wall moves: all T0 at `HEIGHT=0.4`
 - sparse infill moves: all T0, mostly `HEIGHT=0.4`
@@ -114,6 +128,15 @@ The object-role checker found no violations for the expected mapping:
 - inner wall -> T0 / 0.4 mm
 - sparse infill -> T0 / 0.4 mm
 - internal solid infill -> T0 / 0.4 mm
+
+The repeatable checker command is:
+
+```powershell
+python scripts\check_mixed_nozzle_gcode.py `
+  --gcode path\to\plate_1.gcode `
+  --outer-tool T1 --inner-tool T0 --sparse-infill-tool T0 --solid-infill-tool T0 `
+  --forbid-object-tools T2,T3
+```
 
 ## Real Print Validation
 
@@ -130,7 +153,8 @@ Local checks run on Windows:
 
 - `Snapmaker_Orca` Release target: build passed.
 - `libslic3r_tests.exe [MachineFilamentSync]`: passed, 17 assertions.
-- `libslic3r_tests.exe [MixedLayerHeight]`: passed, 17 assertions.
+- `libslic3r_tests.exe [MixedLayerHeight]`: covers span planning, coarse target
+  layer height, max layer height clamping, and legacy ratio fallback.
 - `Snapmaker_Orca_profile_validator.exe --vendor Snapmaker`: passed.
 - Real U1 mixed-nozzle test print: passed.
 
@@ -151,10 +175,11 @@ production profile set.
 - U1 multi-tool offset calibration is center-to-center. Different nozzle sizes
   can share the same center offsets, but wall overlap, line width, and first
   layer contact still need physical tuning.
-- Mixed-layer internal walls are V1 logic. It combines internal wall paths onto
-  the upper fine layer and removes the lower fine-layer internal wall path. It
-  does not yet reclipped/reintersect internal walls against changing geometry.
-- Mixed-layer internal solid infill is best-effort and intersection-based. It
+- Mixed-layer sparse infill is the conservative default. Mixed-layer internal
+  walls are V1 logic. They combine internal wall paths onto the upper fine layer
+  and remove the lower fine-layer internal wall paths. They are not yet
+  reclipped/reintersected against changing geometry.
+- Mixed-layer internal solid infill is experimental and intersection-based. It
   combines only where the same internal-solid area exists across the full
   automatic layer span; top/bottom surfaces stay at the process layer height.
 - Other nozzle pairs now share the same mode controls. The 0.2/0.8 mm pairing
@@ -183,3 +208,22 @@ Before printing, inspect preview by tool:
 
 Stop after the first few layers if tool offsets, purge, or wall bonding look
 wrong.
+
+## Installation And Recovery
+
+1. Download the Experimental/Alpha Snapmaker Orca asset and its SHA-256 file
+   from this fork's release page.
+2. Verify the checksum, back up projects and custom presets, then install the
+   build without deleting the official installer.
+3. Flash the matching mixed-nozzle firmware only when testing mixed-nozzle
+   printing. ESP32 timelapse does not require this firmware patch.
+4. To return to the official slicer, uninstall the experimental build and
+   install a release from `Snapmaker/OrcaSlicer`.
+5. To return the printer to official behavior, reflash a known-good official
+   U1 image using the recovery procedure appropriate for the installed
+   extended firmware.
+
+This is an independent community fork, not an official Snapmaker release. The
+slicer remains under AGPL-3.0. The extended firmware fork remains under
+GPL-3.0; redistribution of a firmware binary must include access to its exact
+corresponding source and license notices.

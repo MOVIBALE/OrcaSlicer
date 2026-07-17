@@ -2,15 +2,15 @@
 
 ## Title
 
-Snapmaker U1 mixed-nozzle experimental build
+Snapmaker Orca 2.3.5 U1 Experimental Alpha
 
 ## Tag
 
-`mixed-nozzle-u1-v0.1.0`
+`u1-experimental-2.3.5-alpha.1`
 
 ## Target Branch
 
-`mixed-nozzle-u1`
+`Min/2.3.5-beta-mixed-nozzle`
 
 ## Summary
 
@@ -27,15 +27,19 @@ This release requires both:
 
 - Independent per-head nozzle diameter editing for U1.
 - Nozzle diameter shown in each nozzle tab.
+- Mixed Nozzle workstation in the Prepare sidebar for quick plans, nozzle map,
+  feature assignment, layer combining, and validation.
 - `outer_wall_filament` setting for routing external perimeters to a different
   tool than inner walls.
 - `mixed_nozzle_mode` selector:
   - Same layer, different line widths
   - Mixed layer, different line widths
-- Automatic mixed-layer ratio derives combined coarse-feature height from the
-  selected outer-wall nozzle and coarse feature nozzle.
-- Manual mixed-layer ratio override is available when automatic ratio is
-  disabled.
+- Mixed-layer sparse infill, inner wall, and internal solid infill combining
+  are controlled separately.
+- Automatic coarse layer height targeting uses half of the coarse nozzle
+  diameter, limited by the configured coarse extruder max layer height.
+- Legacy manual mixed-layer ratio override remains available as an advanced
+  compatibility path.
 - Machine filament sync from the connected U1.
 - Correct physical-head to logical T-slot filament mapping through
   `extruder_map_table`.
@@ -49,18 +53,20 @@ This release requires both:
 - Windows Snapmaker Orca build artifact.
 - U1 firmware `.bin` built from the firmware branch with the validation patch.
 - Optional sample cube G-code generated from the 0.10 mixed-layer profile.
+- Optional `scripts/check_mixed_nozzle_gcode.py` checker output for the sample
+  cube.
 - Real print validation photo:
   `docs/mixed-nozzle-u1/assets/real-print-cube.jpg`
 
-Current local firmware artifact:
-
-`F:\FC\SnapmakerU1-Extended-Firmware\firmware\U1_extended_1.4.1-paxx12-19_mixed-nozzle-codex.bin`
+Attach only a firmware binary built from the published matching source commit,
+and include its SHA-256 checksum and GPL-3.0 source link.
 
 ## Validation Results
 
 - Snapmaker Orca Release build passed.
 - `libslic3r_tests.exe [MachineFilamentSync]` passed, 17 assertions.
-- `libslic3r_tests.exe [MixedLayerHeight]` passed, 17 assertions.
+- `libslic3r_tests.exe [MixedLayerHeight]` covers span planning, automatic
+  coarse layer height, max layer height clamping, and legacy ratio fallback.
 - Snapmaker profile validator passed for the Snapmaker profile bundle.
 - 20 mm cube G-code inspection passed:
   - outer wall on T1 / 0.2 mm / 0.10 mm
@@ -78,6 +84,15 @@ Current local firmware artifact:
     four-layer-overlapped internal solid area was available
   - role/tool checker violations: 0
 - Real Snapmaker U1 mixed-nozzle print on 2026-06-18 passed.
+
+Repeatable checker command:
+
+```powershell
+python scripts\check_mixed_nozzle_gcode.py `
+  --gcode path\to\plate_1.gcode `
+  --outer-tool T1 --inner-tool T0 --sparse-infill-tool T0 --solid-infill-tool T0 `
+  --forbid-object-tools T2,T3
+```
 
 ## Real Print Photo
 
@@ -106,9 +121,9 @@ specific physical setup.
 
 ## Known Limitations
 
-- Mixed-layer internal walls are not reclipped against geometry changes between
-  fine layers.
-- Mixed-layer internal solid infill only combines fully overlapping
+- Mixed-layer internal walls are experimental and are not reclipped against
+  geometry changes between fine layers.
+- Mixed-layer internal solid infill is experimental and only combines fully overlapping
   internal-solid areas; top/bottom surfaces stay at the process layer height.
 - Prime tower, wipe, and purge volumes are not fully tuned for asymmetric
   0.2/0.4 mm swaps.

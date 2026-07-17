@@ -4,7 +4,7 @@
 [![Build all](https://github.com/Snapmaker/OrcaSlicer/actions/workflows/build_all.yml/badge.svg?branch=main)](https://github.com/Snapmaker/OrcaSlicer/actions/workflows/build_all.yml)
 <br>Snapmaker Orca is an open source slicer for FDM printers based on OrcaSlicer.
  
-## mixed-nozzle-u1 Experimental Branch
+## Experimental U1 Feature Build
 
 This fork branch contains an experimental Snapmaker U1 mixed-nozzle workflow.
 It is not an official Snapmaker release.
@@ -26,12 +26,18 @@ Main changes in this branch:
 - U1 nozzle diameters can be edited independently per toolhead.
 - Nozzle tabs show the selected diameter.
 - `outer_wall_filament` routes external perimeters to a different tool than inner walls.
+- The Prepare sidebar includes a Mixed Nozzle workstation for quick plans,
+  nozzle mapping, feature assignment, layer combining, and validation.
 - `mixed_nozzle_mode` selects same-layer or mixed-layer slicing.
-- Mixed-layer mode defaults to an automatic layer ratio based on the selected
-  outer-wall nozzle and coarse feature nozzle, with a manual override available.
+- Mixed-layer mode uses automatic coarse layer height targeting by default.
+  Sparse infill is the conservative default; inner wall and internal solid
+  infill combining are explicit experimental switches.
 - Printer filament sync reads U1 head-slot material/nozzle information and maps physical heads to logical T-slots through `extruder_map_table`.
+- `scripts/check_mixed_nozzle_gcode.py` validates exported role/tool G-code.
 - Two starter U1 process profiles are included as mode examples.
 - A matching U1 firmware validation patch is required for mixed-nozzle G-code.
+- Optional ESP32 Timelapse Box support emits `ESP_TIMELAPSE_SHOT` for Klipper
+  while retaining the printer's native timelapse command.
 
 Real Snapmaker U1 mixed-nozzle print validation passed on 2026-06-18:
 
@@ -40,12 +46,27 @@ Real Snapmaker U1 mixed-nozzle print validation passed on 2026-06-18:
 Read the full mixed-nozzle notes before using this branch:
 
 - [Mixed-nozzle U1 README](docs/mixed-nozzle-u1/README.md)
+- [中文说明](docs/mixed-nozzle-u1/README.zh-CN.md)
 - [Release notes](docs/mixed-nozzle-u1/RELEASE_NOTES.md)
+- [中文发布说明](docs/mixed-nozzle-u1/RELEASE_NOTES.zh-CN.md)
 - [GitHub release draft](docs/mixed-nozzle-u1/GITHUB_RELEASE_DRAFT.md)
+- [中文 GitHub Release 草稿](docs/mixed-nozzle-u1/GITHUB_RELEASE_DRAFT.zh-CN.md)
+- [ESP32 Timelapse Box](docs/esp32-timelapse/README.md)
+- [ESP32 延时摄影盒子](docs/esp32-timelapse/README.zh-CN.md)
 - Matching firmware branch: [MOVIBALE/SnapmakerU1-Extended-Firmware mixed-nozzle-u1](https://github.com/MOVIBALE/SnapmakerU1-Extended-Firmware/tree/mixed-nozzle-u1)
 
 Use this branch only if you can recover the printer firmware and are comfortable
 testing experimental slicer and firmware behavior.
+
+The mixed-nozzle validation patch is required only for mixed-nozzle printing.
+ESP32 timelapse uses the Klipper macro boundary and does not depend on the
+modified U1 firmware.
+
+To return to the official slicer, uninstall this experimental build and install
+the latest release from [Snapmaker/OrcaSlicer](https://github.com/Snapmaker/OrcaSlicer/releases).
+Back up custom presets and projects first. Restoring the slicer does not restore
+printer firmware; reflash a known-good official or extended firmware image
+separately when leaving the mixed-nozzle firmware test.
 
 
 
